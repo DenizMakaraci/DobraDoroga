@@ -21,7 +21,7 @@ the records needed to resolve them.
 | **Financial checks** | Plain arithmetic, no AI: compares like-for-like groups, flags payments over authorization and repeated references. |
 | **AI investigation** | Before the model runs, code builds **dossiers**: a dated timeline of everything on the street, a profile per supplier (wins, losses, bid spreads, non-competitive work, lobbying, RENA, audits), the money table, and the full text of the uploaded documents when they fit. **Quick** mode is one pass with tools. **Deep** mode plans 3–6 case-specific hypotheses, tests each with its own reading budget (a fast model, `ROADWATCH_FAST_PROVIDER`), synthesises, then an adversarial review pass checks citations, segment limits and whether innocent explanations were tested against the data. Findings carry a confidence rating (supported / plausible / speculative), the tests performed and what record would change the conclusion; the team's questions get explicit cited answers. The model gets a document index and tools to search and read pages and to filter the pulled open-data rows. It cross-checks the city's data against the uploaded documents and returns findings with citations, counter-explanations and next steps. Findings whose quotations don't exist in the evidence are discarded server-side. |
 | **Road condition** | Dated, geolocated observations stored as unverified leads for an engineering check. |
-| **Team workspace** | Email + password accounts: the admin invites people (link valid 72 h, emailed when SMTP is configured), each sets their own password; roles viewer / investigator / counsel / admin; password change signs out other devices; admin-issued reset links; deactivation ends sessions at once. A Discussion tab per case: threads anchored to the whole case, a finding or a document page, with citations verified against the record; a findings board (open → investigating → explained / escalated / dismissed, with an owner and note, stable across re-runs); structured **assessments** (summary, legal basis, risk, recommended action, draft/reviewed) pinned on the report. Conclusory language without a citation is posted as "opinion", not blocked. Team notes are sent to the AI with each investigation as leads to verify, never as evidence, and are included in the export. |
+| **Team workspace** | Email + password accounts: the admin invites people (link valid 72 h, emailed when SMTP is configured), each sets their own password; roles viewer / investigator / counsel / admin; password change signs out other devices; admin-issued reset links; deactivation ends sessions at once. A Discussion tab per case: threads anchored to the whole case, a finding or a document page, with citations verified against the record; a findings board (open → investigating → explained / escalated / dismissed, with an owner and note, stable across re-runs); structured **assessments** (summary, legal basis, risk, recommended action, draft/reviewed) pinned on the report. Conclusory language without a citation is posted as "opinion", not blocked. Team notes are sent to the AI with each investigation as leads to verify, never as evidence, and are included in the export. Street cases on the same set of streets in one city, in any order, share one discussion, so people who each opened their own case on those roads work in a single thread; changing a case's streets moves it to that set's discussion, and finding statuses stay per case. |
 
 ## Run locally
 
@@ -86,19 +86,26 @@ Final payments, invoices and inspection records are usually **not** online and n
 
 ## Hosting
 
-Roadwatch is a single Python service with a SQLite database — it needs one instance and
-a persistent disk. **Before exposing it to the internet, set `ROADWATCH_ACCESS_KEY`**;
+Roadwatch is a single Python service. With its default SQLite database it needs one instance and
+a persistent disk; with MongoDB it needs neither. **Before exposing it to the internet, set `ROADWATCH_ACCESS_KEY`**;
 otherwise anyone who finds the URL can read cases and spend your AI quota.
 
 ### Render (recommended; `render.yaml` included)
 
-1. Push this folder to a Git repository.
-2. In Render: **New → Blueprint**, pick the repo. It creates a Starter web service with a 1 GB disk at `/var/data`.
-3. In the service's **Environment** tab set `ROADWATCH_ACCESS_KEY` (the sign-in key you give users) and `ROADWATCH_API_KEY` (your model provider key).
-4. Deploy. Share the `https://….onrender.com` URL and the access key.
+The included blueprint runs on Render's free plan and keeps cases, accounts and discussion in MongoDB Atlas, so
+nothing has to survive on the server.
 
-The Starter plan (~US$7/month at time of writing) is needed for the disk. Free plans have
-no persistent storage and would lose all cases on each restart.
+1. Create a free MongoDB Atlas cluster and a database user. Under **Network Access** allow `0.0.0.0/0`: Render's
+   free plan has no fixed outbound address, so the database is protected by its password alone; use a long one.
+2. Push this folder to a Git repository.
+3. In Render: **New → Blueprint**, pick the repo. It asks for three values: `ROADWATCH_MONGODB_URI` (the Atlas
+   connection string), `ROADWATCH_ACCESS_KEY` (the administrator's sign-in key) and `ROADWATCH_API_KEY` (your model
+   provider key).
+4. Deploy. Sign in at the `https://….onrender.com` address with the access key and invite people from **Team & access**.
+
+A free service sleeps after about 15 minutes without visitors and takes about a minute to wake; the downloaded
+open-data cache is lost on each restart and fetched again when needed. A paid plan removes the sleeping.
+To run on SQLite instead, give the service a persistent disk, point `ROADWATCH_DB` at it and keep a single instance.
 
 ### Docker (any host)
 

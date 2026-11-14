@@ -19,13 +19,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10"]
-mongo = ["pymongo>=4.9,<5"]
+mongo = ["pymongo>=4.9,<4.20"]
 
 [tool.setuptools]
-packages = ["roadwatch"]
+packages = ["roadwatch", "roadwatch.opendata"]
 
 [tool.setuptools.package-data]
-roadwatch = ["static/*"]
+roadwatch = ["static/*", "static/vendor/leaflet/*", "static/vendor/leaflet/images/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
