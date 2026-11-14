@@ -29,7 +29,8 @@ load_dotenv(ROOT.parent / ".env")  # Never load the unrelated parent project's c
 app = FastAPI(title="Roadwatch", version="0.2.0")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
-PUBLIC_PATHS = {"/api/login", "/api/session", "/healthz", "/api/invite/accept", "/api/password/forgot", "/api/signup"}
+GUEST_READS = re.compile(r"/api/(config|me|projects|projects/[^/]+|search|cities|provinces|condition)")
+PUBLIC_PATHS = {"/api/login", "/api/guest", "/api/session", "/healthz", "/api/invite/accept", "/api/password/forgot", "/api/signup"}
 
 
 def meaning_search():
@@ -62,6 +63,8 @@ async def request_boundary(request: Request, call_next):
     if path.startswith("/api/") and path not in PUBLIC_PATHS and not path.startswith(("/api/invite/", "/api/verify/")) and auth.enabled():
         if not request.state.user:
             return JSONResponse({"detail": "Sign in required.", "auth": True}, status_code=401)
+        if request.state.user["role"] == "guest" and not (path == "/api/logout" or (request.method == "GET" and GUEST_READS.fullmatch(path))):
+            return JSONResponse({"detail": "Guests can read cases but not change, discuss or export them. Sign in to do more."}, status_code=403)
         if request.method in {"POST", "PUT", "DELETE", "PATCH"} and request.state.user["role"] == "viewer" \
                 and not (path.endswith("/comments") or "/comments/" in path or path.endswith("/status") or path == "/api/logout"):
             return JSONResponse({"detail": "Viewers can read and discuss but not change the case. Ask an admin for the investigator role."}, status_code=403)
@@ -129,7 +132,8 @@ def session(request: Request):
     return {"auth_required": auth.enabled(), "signed_in": user is not None, "user": user,
             "signup_open": auth.enabled() and auth.signup_open(), "signup_role": auth.signup_role(),
             "email_enabled": auth.smtp_configured(), "rules": WORKSPACE_RULES,
-            "accounts": auth.enabled() and user is None and any(m["has_password"] for m in store.members())}
+            "accounts": auth.enabled() and user is None and any(m["has_password"] for m in store.members()),
+            "guest_open": auth.guest_open()}
 
 
 @app.post("/api/signup", status_code=201)
@@ -175,6 +179,14 @@ def login(request: Request, data: LoginInput):
     if not data.access_key:
         raise HTTPException(422, "Enter your email and password, or an access key.")
     return signed_in_response(request, auth.check_login(request, data.access_key))
+
+
+@app.post("/api/guest")
+def enter_as_guest(request: Request):
+    """Read-only entry without an account, when ROADWATCH_GUEST=on."""
+    if not auth.guest_open():
+        raise HTTPException(403, "Guest access is not enabled on this server.")
+    return signed_in_response(request, dict(auth.GUEST))
 
 
 def invite_link(request: Request, code: str):
@@ -296,9 +308,9 @@ def logout():
 
 
 @app.get("/api/config")
-def config():
+def config(request: Request):
     limit = daily_ai_limit()
-    meaning = meaning_search()
+    meaning = None if request.state.user["role"] == "guest" else meaning_search()
     if meaning:
         meaning.start()
     return {**ai.configuration(), "daily_ai_limit": limit, "ai_runs_today": store.ai_runs_today(),
@@ -312,11 +324,13 @@ def projects():
 
 
 @app.get("/api/search")
-def search_cases(q: str, mode: str = "words"):
+def search_cases(request: Request, q: str, mode: str = "words"):
     """Evidence pages in any case that contain every word of the query, or (mode=meaning) the pages closest to it in meaning."""
     if not 2 <= len(q.strip()) <= 200:
         raise HTTPException(422, "Enter at least two characters to search.")
     if mode == "meaning":
+        if request.state.user["role"] == "guest":
+            raise HTTPException(403, "Search by meaning needs an account. Search by exact words is open to guests.")
         meaning = meaning_search()
         if not meaning:
             raise HTTPException(422, "Search by meaning needs the MongoDB store and an embedding model (ROADWATCH_EMBED_MODEL).")

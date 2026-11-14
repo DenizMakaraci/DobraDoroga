@@ -3,7 +3,10 @@ password-reset links. ROADWATCH_ACCESS_KEY is the administrator's bootstrap key 
 out. When no key is configured the app is single-user and local: everyone is 'Local user' (admin).
 
 Roles, lowest to highest: viewer (read, discuss) < investigator (+ edit the case, pull data, run investigations)
-< counsel (same powers, labelled as a lawyer) < admin (+ manage members)."""
+< counsel (same powers, labelled as a lawyer) < admin (+ manage members).
+
+With ROADWATCH_GUEST=on a visitor can also enter without an account as a guest: read cases and search them,
+nothing else - no changes, no discussion, no export, nothing that spends the AI or embedding quota."""
 import hashlib
 import hmac
 import os
@@ -20,6 +23,7 @@ SESSION_DAYS = 14
 ROLES = ("viewer", "investigator", "counsel", "admin")
 ADMIN = {"id": "admin", "name": "Administrator", "role": "admin"}
 LOCAL = {"id": "local", "name": "Local user", "role": "admin"}
+GUEST = {"id": "guest", "name": "Guest", "role": "guest"}
 _attempts = defaultdict(list)  # ip -> timestamps of failed logins
 
 
@@ -29,6 +33,10 @@ def access_key():
 
 def enabled():
     return bool(access_key())
+
+
+def guest_open():
+    return enabled() and os.getenv("ROADWATCH_GUEST", "").strip().lower() in ("on", "1", "true", "yes")
 
 
 def _secret():
@@ -96,7 +104,7 @@ def verified_or_pending(member):
 
 def issue_token(user):
     expires = str(int(time.time()) + SESSION_DAYS * 86400)
-    salt = "" if user["id"] in ("admin", "local") else (store.member(user["id"]) or {}).get("token_salt") or ""
+    salt = "" if user["id"] in ("admin", "local", "guest") else (store.member(user["id"]) or {}).get("token_salt") or ""
     payload = f"{expires}.{user['id']}"
     signature = hmac.new(_secret(), (payload + "." + salt).encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{signature}"
@@ -108,13 +116,15 @@ def token_user(token):
     if not token or token.count(".") != 2:
         return None
     expires, user_id, signature = token.split(".")
-    found = None if user_id == "admin" else store.member(user_id)
-    salt = "" if user_id == "admin" else (found or {}).get("token_salt") or ""
+    found = None if user_id in ("admin", "guest") else store.member(user_id)
+    salt = "" if user_id in ("admin", "guest") else (found or {}).get("token_salt") or ""
     expected = hmac.new(_secret(), f"{expires}.{user_id}.{salt}".encode(), hashlib.sha256).hexdigest()
     if not (hmac.compare_digest(signature, expected) and expires.isdigit() and int(expires) > time.time()):
         return None
     if user_id == "admin":
         return dict(ADMIN)
+    if user_id == "guest":
+        return dict(GUEST) if guest_open() else None
     return public(found) if found and found["active"] and found.get("verified", 1) else None
 
 

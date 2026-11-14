@@ -284,3 +284,52 @@ def test_daily_ai_cap_and_project_delete(client, case, monkeypatch):
     assert client.delete(base).status_code == 200
     assert client.get(base).status_code == 404
     assert client.delete(base).status_code == 404
+
+
+def test_guest_mode_is_read_only_and_off_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROADWATCH_DB", str(tmp_path / "guest.sqlite3"))
+    monkeypatch.setenv("ROADWATCH_ACCESS_KEY", "correct-horse")
+    monkeypatch.delenv("ROADWATCH_GUEST", raising=False)
+    from roadwatch import auth
+    auth._attempts.clear()  # the lockout test above leaves this address throttled
+    with TestClient(app) as admin, TestClient(app) as guest:
+        assert admin.post("/api/login", json={"access_key": "correct-horse"}).status_code == 200
+        case = admin.post("/api/demo").json()
+        admin.post(f"/api/projects/{case['id']}/investigate", json={"use_ai": False})
+        admin.post(f"/api/projects/{case['id']}/comments", json={"body": "Internal working note."})
+
+        assert guest.get("/api/session").json()["guest_open"] is False
+        assert guest.post("/api/guest").status_code == 403 and guest.get("/api/projects").status_code == 401
+
+        monkeypatch.setenv("ROADWATCH_GUEST", "on")
+        assert guest.get("/api/session").json()["guest_open"] is True
+        entered = guest.post("/api/guest")
+        assert entered.status_code == 200 and entered.json()["user"]["role"] == "guest"
+        assert guest.get("/api/session").json()["user"]["role"] == "guest"
+
+        # reading is open
+        assert [p["id"] for p in guest.get("/api/projects").json()] == [case["id"]]
+        seen = guest.get(f"/api/projects/{case['id']}").json()
+        assert seen["evidence"] and seen["reports"][-1]["findings"]
+        assert guest.get("/api/search", params={"q": "asphalt"}).json()["mode"] == "words"
+        assert guest.get("/api/config").json()["semantic_search"] is False
+        assert guest.get("/api/cities").status_code == 200 and guest.get("/api/me").json()["role"] == "guest"
+
+        # everything else is closed
+        id_ = case["id"]
+        closed = [guest.post("/api/projects", json={"name": "x", "road": "y"}), guest.post("/api/demo"), guest.delete(f"/api/projects/{id_}"),
+                  guest.post(f"/api/projects/{id_}/investigate", json={"use_ai": False}), guest.post(f"/api/projects/{id_}/open-data", json={}),
+                  guest.post(f"/api/projects/{id_}/evidence", json={"title": "t", "kind": "other", "text": "x"}),
+                  guest.post(f"/api/projects/{id_}/comments", json={"body": "hello"}), guest.get(f"/api/projects/{id_}/discussion"),
+                  guest.get(f"/api/projects/{id_}/export"), guest.get("/api/members"), guest.get("/api/geocode", params={"q": "King Street"}),
+                  guest.get("/api/search", params={"q": "asphalt", "mode": "meaning"}), guest.put("/api/me", json={"name": "Not a guest"})]
+        assert [r.status_code for r in closed] == [403] * len(closed)
+        assert "Guests can read" in closed[0].json()["detail"]
+        assert "Internal working note." not in guest.get(f"/api/projects/{id_}").text
+
+        # leaving, and switching guest mode off, both end the guest session
+        again = TestClient(app)
+        again.post("/api/guest")
+        assert guest.post("/api/logout").status_code == 200 and guest.get("/api/projects").status_code == 401
+        monkeypatch.setenv("ROADWATCH_GUEST", "off")
+        assert again.get("/api/projects").status_code == 401 and admin.get("/api/projects").status_code == 200

@@ -13,6 +13,7 @@ let sessionInfo = {};
 let map = null, mapLayer = null, mapResults = [], cities = [], me = null, discussion = null, discussionTimer = null, discussAnchor = null;
 const ROLE_RANK = { viewer: 0, investigator: 1, counsel: 2, admin: 3 };
 const canEdit = () => !me || ROLE_RANK[me.role] >= 1;
+const isGuest = () => me?.role === "guest";
 const STATUS_LABELS = { open: "Open", investigating: "Investigating", explained: "Explained (innocent)", escalated: "Escalated", dismissed: "Dismissed" };
 const RISK_LABELS = { low: "Low risk", medium: "Medium risk", high: "High risk", unclear: "Risk unclear" };
 let conditionLayer = null, conditionLegend = null, conditionTimer = null, conditionRequest = 0;
@@ -45,7 +46,7 @@ function setLoginMode(byKey) {
   $("[data-action='toggle-login-mode']").textContent = byKey ? "Use email and password instead" : "Use an access key instead";
 }
 // Until someone has an email and password, the only way in is the administrator's access key: open on that.
-function showLogin() { const d = $("#login-dialog"); $("#signup-link").hidden = !sessionInfo.signup_open; if (!d.open) { setLoginMode(sessionInfo.accounts === false); d.showModal(); } }
+function showLogin() { const d = $("#login-dialog"); $("#signup-link").hidden = !sessionInfo.signup_open; $("#guest-button").hidden = !sessionInfo.guest_open; if (!d.open) { setLoginMode(sessionInfo.accounts === false); d.showModal(); } }
 function showSignup() {
   closeDialog($("#login-dialog"));
   $("#signup-role-help").textContent = `New accounts start as ${sessionInfo.signup_role || "viewer"}: you can read every case and take part in the discussion. An administrator can give you the investigator role.${sessionInfo.email_enabled ? " You will need to confirm your email address." : ""}`;
@@ -94,7 +95,7 @@ async function selectProject(id) {
   const project = await api(`/projects/${id}`);
   if (requestId !== loadingProject) return;
   current = project; tab = "report"; discussion = null; discussAnchor = null; renderSidebar(); render();
-  loadDiscussion(true);
+  if (!isGuest()) loadDiscussion(true);
 }
 function empty(title, description, button = "") {
   return `<div class="panel empty"><div class="symbol">⌕</div><h2>${title}</h2><p>${description}</p>${button}</div>`;
@@ -112,15 +113,18 @@ function render() {
     ? [["report", "Investigation"], ["discussion", `Discussion${discussion?.comments?.length ? ` (${discussion.comments.length})` : ""}`], ["vendor", "Supplier & open data"], ["evidence", "Documents"], ["finances", "Spending"]]
     : [["report", "Investigation"], ["discussion", `Discussion${discussion?.comments?.length ? ` (${discussion.comments.length})` : ""}`], ["map", "Map & open data"], ["evidence", "Documents"], ["finances", "Spending"], ["observations", "Road condition"]];
   if (vendorCase && (tab === "map" || tab === "observations")) tab = "vendor";
+  if (isGuest()) { tabs.splice(1, 1); if (tab === "discussion") tab = "report"; }
   workspace.innerHTML = `
-    <div class="page-heading"><div><p class="eyebrow">${escapeHTML(vendorCase ? "SUPPLIER CASE" : current.contract_number ? `CONTRACT ${current.contract_number}` : "CASE")}</p><h1>${escapeHTML(current.name)}</h1><p class="subtitle">${vendorCase ? escapeHTML(current.contractor) + " · " + escapeHTML(vendorScope()) : escapeHTML(current.road) + (current.contractor ? " · " + escapeHTML(current.contractor) : "") + (current.completed_on ? " · completed " + escapeHTML(current.completed_on) : "")}</p></div><div class="actions"><a class="link-button" href="/api/projects/${current.id}/export">↓ Export</a><button class="link-button danger" data-action="delete-project">Delete case</button></div></div>
+    <div class="page-heading"><div><p class="eyebrow">${escapeHTML(vendorCase ? "SUPPLIER CASE" : current.contract_number ? `CONTRACT ${current.contract_number}` : "CASE")}</p><h1>${escapeHTML(current.name)}</h1><p class="subtitle">${vendorCase ? escapeHTML(current.contractor) + " · " + escapeHTML(vendorScope()) : escapeHTML(current.road) + (current.contractor ? " · " + escapeHTML(current.contractor) : "") + (current.completed_on ? " · completed " + escapeHTML(current.completed_on) : "")}</p></div><div class="actions"${isGuest() ? " hidden" : ""}><a class="link-button" href="/api/projects/${current.id}/export">↓ Export</a><button class="link-button danger" data-action="delete-project">Delete case</button></div></div>
+    ${isGuest() ? '<div class="banner"><strong>GUEST</strong> — you can read every case and search them. <button class="text-button" data-action="logout">Sign in</button> to discuss, add records or run an investigation.</div>' : ""}
     ${current.demo ? '<div class="banner"><strong>SAMPLE CASE</strong> — every record, company and amount here is fictional, made up to show how a case works. Delete it whenever you like.</div>' : ""}
     <div class="stats"><div class="stat"><div class="label">Documents</div><div class="value">${current.evidence.length}</div><div class="foot">${current.evidence.filter(d => d.source_url).length} with source links</div></div><div class="stat"><div class="label">Financial entries</div><div class="value">${current.finances.length}</div><div class="foot">Sourced amounts · CAD</div></div>${vendorCase ? `<div class="stat"><div class="label">Open-data sets</div><div class="value">${pulledSets}</div><div class="foot">${pulledSets ? `${new Set((current.open_data || []).map(d => TIER_OF[d.key]).filter(Boolean)).size} tier(s) of government` : "Not pulled yet"}</div></div>` : `<div class="stat"><div class="label">Observations</div><div class="value">${current.observations.length}</div><div class="foot">Road condition reports</div></div>`}<div class="stat"><div class="label">Findings</div><div class="value">${latest ? latest.findings.length : "—"}</div><div class="foot">${stale ? "Report out of date" : latest ? "For human review" : "Not investigated yet"}</div></div></div>
     <div class="tabs" role="tablist">${tabs.map(([key, title]) => `<button role="tab" aria-selected="${key === tab}" class="tab ${key === tab ? "active" : ""}" data-tab="${key}">${title}</button>`).join("")}</div>
     ${busy ? `<div class="investigation-progress" role="status"><span class="pulse"></span>${busy === "opendata" ? "Pulling open data… the first pull downloads several datasets and can take a minute." : busy === "deep" ? "Deep investigation: planning hypotheses, testing each against the records, synthesising, then reviewing. This takes several minutes." : "Working… an AI investigation reads every page and can take a minute or two."}</div>` : ""}
     <div id="tab-content">${tab === "report" ? renderReport(latest, stale) : tab === "discussion" ? renderDiscussion(latest) : tab === "map" ? renderMap() : tab === "vendor" ? renderVendor() : tab === "evidence" ? renderEvidence() : tab === "finances" ? renderFinances() : renderObservations()}</div>`;
   if (busy) workspace.querySelectorAll("button").forEach(button => button.disabled = true);
-  if (!canEdit()) workspace.querySelectorAll("[data-action='checks'],[data-action='investigate'],[data-action='investigate-deep'],[data-action='evidence'],[data-action='finance'],[data-action='observation'],[data-action='pull-open-data'],[data-action='save-vendor'],[data-action='delete-project'],[data-delete],[data-remove-street],[data-limit]").forEach(el => { el.disabled = true; el.title = "Viewers can read and discuss; ask an admin for the investigator role."; });
+  if (!canEdit()) workspace.querySelectorAll("[data-action='checks'],[data-action='investigate'],[data-action='investigate-deep'],[data-action='evidence'],[data-action='finance'],[data-action='observation'],[data-action='pull-open-data'],[data-action='save-vendor'],[data-action='delete-project'],[data-delete],[data-remove-street],[data-limit]").forEach(el => { el.disabled = true; el.title = isGuest() ? "Guests can only read. Sign in to work on the case." : "Viewers can read and discuss; ask an admin for the investigator role."; });
+  if (isGuest()) workspace.querySelectorAll("[data-discuss],[data-action='new-project'],[data-action='demo']").forEach(el => { el.hidden = true; });
   if (tab === "discussion") { if (!discussion) loadDiscussion(); clearTimeout(discussionTimer); discussionTimer = setTimeout(function poll() { if (tab === "discussion" && current) loadDiscussion(true).then(() => { discussionTimer = setTimeout(poll, 20000); }); }, 20000); }
   if (tab === "map") { mountMap(); $("#condition-toggle")?.addEventListener("change", e => toggleCondition(e.target.checked).catch(err => notify(err.message, true))); } else map = null;
 }
@@ -673,6 +677,7 @@ document.addEventListener("click", async (event) => {
       await api(`/projects/${current.id}/comments/${c.id}`, "PUT", c.kind === "assessment" ? { assessment: { ...c.assessment, summary: body } } : { body });
       return await loadDiscussion();
     }
+    if (button.dataset.action === "guest") { await api("/guest", "POST", {}); location.reload(); return; }
     if (button.dataset.action === "team") return await openTeamDialog();
     if (button.dataset.memberToggle) { await api(`/members/${button.dataset.memberToggle}`, "PUT", { active: button.dataset.active !== "1" }); return await openTeamDialog(); }
     if (button.dataset.memberReset) { if (!confirm("Issue a new link? Their current password and sessions stop working immediately.")) return; const m = await api(`/members/${button.dataset.memberReset}`, "PUT", { reset_password: true }); await openTeamDialog(); return showNewKey(m); }
@@ -872,7 +877,9 @@ async function boot() {
   if (projects.length) await selectProject(projects[0].id); else render();
 }
 function showUser() {
-  $("#whoami").textContent = me ? `Signed in as ${me.name} · ${me.role}` : "";
+  $("#whoami").textContent = isGuest() ? "Browsing as a guest · read only" : me ? `Signed in as ${me.name} · ${me.role}` : "";
+  $("#logout-button").textContent = isGuest() ? "Sign in" : "Sign out";
+  document.querySelectorAll(".sidebar .new-case, .sidebar .demo-button").forEach(el => { el.hidden = isGuest(); });
   $("#team-button").hidden = !(me && me.role === "admin");
   $("#account-button").hidden = !(me && !["admin", "local"].includes(me.id));
 }
