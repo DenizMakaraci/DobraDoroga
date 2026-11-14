@@ -39,7 +39,8 @@ def _db():
     uri = os.environ["ROADWATCH_MONGODB_URI"]
     if uri not in _clients:
         encrypted = uri.startswith("mongodb+srv://") or "tls=true" in uri.lower() or "ssl=true" in uri.lower()
-        _clients[uri] = MongoClient(uri, serverSelectionTimeoutMS=8000, appname="roadwatch", compressors="zlib",
+        _clients[uri] = MongoClient(uri, appname="roadwatch", compressors="zlib",
+                                    **({} if "serverselectiontimeoutms" in uri.lower() else {"serverSelectionTimeoutMS": 8000}),
                                     **({"tlsCAFile": certifi.where()} if encrypted else {}))
     name = os.environ.get("ROADWATCH_MONGODB_DB") or _clients[uri].get_default_database(default="roadwatch").name
     db = _clients[uri][name]

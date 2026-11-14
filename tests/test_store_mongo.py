@@ -142,3 +142,17 @@ def test_migration_copies_a_sqlite_database(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         migrate_mongo.migrate()
     assert migrate_mongo.migrate(replace=True)["cases"] == 1 and len(store.list_projects()) == 1
+
+
+def test_an_unreachable_database_is_explained_instead_of_a_bare_500(monkeypatch):
+    from fastapi.testclient import TestClient
+    from roadwatch.server import app
+    monkeypatch.setenv("ROADWATCH_MONGODB_URI", "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=300")
+    monkeypatch.setenv("ROADWATCH_ACCESS_KEY", "correct-horse")
+    with TestClient(app) as client:
+        session = client.get("/api/session")
+        assert session.status_code == 200 and "cannot reach its database" in session.json()["database_error"]
+        assert session.json()["signed_in"] is False and client.get("/healthz").status_code == 200
+        assert client.post("/api/login", json={"access_key": "correct-horse"}).status_code == 200   # the key needs no database
+        failed = client.get("/api/projects")
+        assert failed.status_code == 503 and "Network Access" in failed.json()["detail"]

@@ -41,6 +41,19 @@ def meaning_search():
     return semantic if semantic.available() else None
 
 
+DATABASE_DOWN = ("Roadwatch cannot reach its database, so cases and accounts are unavailable. If you run this server: in MongoDB "
+                 "Atlas open Network Access and allow access from anywhere (0.0.0.0/0), and check that ROADWATCH_MONGODB_URI on the "
+                 "server is the whole connection string with the real password in it.")
+
+
+def database_down(error):
+    """Whether an exception is the MongoDB store failing to connect or answer, as opposed to a bug."""
+    if not os.getenv("ROADWATCH_MONGODB_URI"):
+        return False
+    from pymongo.errors import PyMongoError
+    return isinstance(error, PyMongoError)
+
+
 def guest_notice():
     """Members are told their words stay in the workspace; say so when guest access makes that untrue."""
     return " Guest access is on: anyone who has this address can read cases and this discussion without an account." if auth.guest_open() else ""
@@ -64,7 +77,15 @@ async def request_boundary(request: Request, call_next):
             if len(body) > 21_000_000:
                 return JSONResponse({"detail": "Request too large. Maximum upload is 15 MB."}, status_code=413)
         request._body = bytes(body)
-    request.state.user = auth.current_user(request)
+    try:
+        request.state.user = auth.current_user(request)
+    except Exception as error:
+        if not database_down(error):
+            raise
+        logging.getLogger("roadwatch").error("database unreachable: %s", type(error).__name__)
+        if path.startswith("/api/") and path != "/api/session":
+            return JSONResponse({"detail": DATABASE_DOWN}, status_code=503)
+        request.state.user = None
     if path.startswith("/api/") and path not in PUBLIC_PATHS and not path.startswith(("/api/invite/", "/api/verify/")) and auth.enabled():
         if not request.state.user:
             return JSONResponse({"detail": "Sign in required.", "auth": True}, status_code=401)
@@ -73,7 +94,13 @@ async def request_boundary(request: Request, call_next):
         if request.method in {"POST", "PUT", "DELETE", "PATCH"} and request.state.user["role"] == "viewer" \
                 and not (path.endswith("/comments") or "/comments/" in path or path.endswith("/status") or path == "/api/logout"):
             return JSONResponse({"detail": "Viewers can read and discuss but not change the case. Ask an admin for the investigator role."}, status_code=403)
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as error:
+        if not database_down(error):
+            raise
+        logging.getLogger("roadwatch").error("database unreachable: %s", type(error).__name__)
+        response = JSONResponse({"detail": DATABASE_DOWN}, status_code=503)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
@@ -133,12 +160,17 @@ WORKSPACE_RULES = ("You will see and may write statements about named companies 
 
 @app.get("/api/session")
 def session(request: Request):
-    user = request.state.user
+    user, accounts, problem = request.state.user, None, None
+    try:
+        accounts = auth.enabled() and user is None and any(m["has_password"] for m in store.members())
+    except Exception as error:
+        if not database_down(error):
+            raise
+        problem = DATABASE_DOWN
     return {"auth_required": auth.enabled(), "signed_in": user is not None, "user": user,
             "signup_open": auth.enabled() and auth.signup_open(), "signup_role": auth.signup_role(),
             "email_enabled": auth.smtp_configured(), "rules": WORKSPACE_RULES + guest_notice(),
-            "accounts": auth.enabled() and user is None and any(m["has_password"] for m in store.members()),
-            "guest_open": auth.guest_open()}
+            "accounts": accounts, "guest_open": auth.guest_open(), "database_error": problem}
 
 
 @app.post("/api/signup", status_code=201)

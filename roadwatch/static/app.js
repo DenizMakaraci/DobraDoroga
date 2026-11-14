@@ -896,6 +896,7 @@ async function init() {
     const session = await api("/session"); sessionInfo = session;
     $("#logout-button").hidden = !session.auth_required;
     me = session.user; showUser();
+    if (session.database_error) { $("#workspace").innerHTML = empty("Roadwatch cannot reach its database", session.database_error); return; }
     if (session.auth_required && await handleInviteLink()) return;
     if (session.auth_required && !session.signed_in) { render(); return showLogin(); }
     await boot();
