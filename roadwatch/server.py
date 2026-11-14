@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 
 from . import ai, auth, demo, documents, geocode, opendata, store
 from .opendata import geo as _geo
@@ -28,6 +29,7 @@ ROOT = Path(__file__).parent
 load_dotenv(ROOT.parent / ".env")  # Never load the unrelated parent project's credentials.
 app = FastAPI(title="Roadwatch", version="0.2.0")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # a case is hundreds of kilobytes of JSON; it compresses about tenfold
 
 GUEST_CLOSED = re.compile(r"/api/(members(/.*)?|me(/.*)?|projects/[^/]+/comments(/.*)?)")
 PUBLIC_PATHS = {"/api/login", "/api/guest", "/api/session", "/healthz", "/api/invite/accept", "/api/password/forgot", "/api/signup"}
