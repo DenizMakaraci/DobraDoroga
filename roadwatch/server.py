@@ -8,6 +8,8 @@ import os
 import re
 import secrets
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -27,7 +29,30 @@ from .models import (EvidenceInput, FinancialInput, ImportInput, InvestigationIn
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT.parent / ".env")  # Never load the unrelated parent project's credentials.
-app = FastAPI(title="Roadwatch", version="0.2.0")
+_pool = ThreadPoolExecutor(max_workers=8)
+
+
+def together(*calls):
+    """Run independent store reads at the same time: each is a round trip to the database when it is remote."""
+    return [future.result() for future in [_pool.submit(call) for call in calls]]
+
+
+def _warm_store():
+    try:
+        from . import store_mongo
+        store_mongo.warm()
+    except Exception as error:
+        logging.getLogger("roadwatch").warning("could not preload cases: %s", type(error).__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    if os.getenv("ROADWATCH_MONGODB_URI"):
+        _pool.submit(_warm_store)
+    yield
+
+
+app = FastAPI(title="Roadwatch", version="0.2.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.add_middleware(GZipMiddleware, minimum_size=1000)  # a case is hundreds of kilobytes of JSON; it compresses about tenfold
 
@@ -738,13 +763,13 @@ def comment_view(comment, members):
 @app.get("/api/projects/{project_id}/discussion")
 def discussion(request: Request, project_id: str):
     project = project_or_404(project_id)
-    members = store.members(include_inactive=True)
-    statuses = store.finding_statuses(project_id)
+    members, statuses, posts = together(lambda: store.members(include_inactive=True), lambda: store.finding_statuses(project_id),
+                                        lambda: store.discussion(project))
     shared = store.discussion_id(project) != project_id
     active = [m for m in members if m["active"]]
     if request.state.user["role"] == "guest":  # a guest may assign an owner by name but does not get the team's email addresses
         active = [{"id": m["id"], "name": m["name"], "role": m["role"], "active": 1} for m in active]
-    return {"comments": store.discussion(project), "statuses": [comment_view(s, members) for s in statuses.values()],
+    return {"comments": posts, "statuses": [comment_view(s, members) for s in statuses.values()],
             "members": active, "notice": DISCUSSION_NOTICE + guest_notice(), "me": request.state.user,
             "shared_streets": [location["road"] for location in project["locations"]] if shared else []}
 

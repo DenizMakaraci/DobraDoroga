@@ -8,6 +8,7 @@ Where Atlas Vector Search is missing (a self-hosted server) or its index is stil
 are found by comparing the query with every stored vector instead.
 """
 
+import hashlib
 import logging
 import os
 import threading
@@ -15,7 +16,9 @@ import time
 
 from openai import OpenAI, RateLimitError
 from pymongo import ASCENDING
-from pymongo.errors import OperationFailure
+from datetime import datetime, timezone
+
+from pymongo.errors import BulkWriteError, OperationFailure
 from pymongo.operations import SearchIndexModel
 
 from . import store_mongo
@@ -23,7 +26,10 @@ from . import store_mongo
 PIECE_CHARACTERS = 1500
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
-_state = {"thread": None, "error": None, "started": 0.0}
+VECTOR_DAYS = 90
+QUOTA_PAUSE = 1800
+
+_state = {"thread": None, "error": None, "started": 0.0, "paused_until": 0.0}
 _lock = threading.Lock()
 _queryable = set()
 
@@ -71,19 +77,37 @@ def embed(texts):
     config, vectors = settings(), []
     with OpenAI(api_key=config["api_key"], base_url=config["base_url"], timeout=60, max_retries=0) as client:
         for start in range(0, len(texts), 16):
-            for attempt in range(6):
+            for attempt in range(3):
                 try:
                     response = client.embeddings.create(model=config["model"], input=texts[start:start + 16],
                                                         dimensions=config["dimensions"])
                     break
                 except RateLimitError:
-                    if attempt == 5:
+                    if attempt == 2:
                         raise
                     time.sleep(20 * (attempt + 1))
             if len(response.data) != len(texts[start:start + 16]):
                 raise ValueError("the embedding model returned a different number of vectors than texts")
             vectors += [item.embedding for item in response.data]
     return vectors
+
+
+def _vectors(db, config, texts):
+    """One vector per text, asking the embedding model only for text it has not embedded before. Refreshing a
+    case's open data rewrites its documents, but most pages come back word for word the same; their vectors are
+    kept in `vectors` by a hash of model and text for VECTOR_DAYS, so a refresh costs only the pages that changed."""
+    keys = [hashlib.sha256(f"{config['key']}\n{text}".encode()).hexdigest() for text in texts]
+    known = {row["_id"]: row["embedding"] for row in db.vectors.find({"_id": {"$in": keys}})}
+    missing = {key: text for key, text in zip(keys, texts) if key not in known}
+    if missing:
+        fresh = embed(list(missing.values()))
+        known.update(zip(missing, fresh))
+        try:
+            db.vectors.insert_many([{"_id": key, "embedding": vector, "at": datetime.now(timezone.utc)} for key, vector in zip(missing, fresh)],
+                                   ordered=False)
+        except BulkWriteError:
+            pass  # another worker stored the same text first
+    return [known[key] for key in keys]
 
 
 def _cases(db):
@@ -106,6 +130,7 @@ def pending(db=None):
 def _ensure_indexes(db, config):
     db.chunks.create_index([("part_id", ASCENDING)])
     db.chunks.create_index([("project_id", ASCENDING)])
+    db.vectors.create_index([("at", ASCENDING)], expireAfterSeconds=VECTOR_DAYS * 86400)
     try:
         if not any(index["name"] == config["index"] for index in db.chunks.list_search_indexes()):
             db.chunks.create_search_index(SearchIndexModel(name=config["index"], type="vectorSearch", definition={"fields": [
@@ -128,7 +153,7 @@ def index_pending():
         rows = [{"_id": f"{part_id}:{page.get('number')}:{offset}", "part_id": part_id, "project_id": project_id,
                  "evidence_id": document.get("id"), "title": title, "page": page.get("number"), "text": piece, "model": config["key"]}
                 for page in document.get("pages") or [] for offset, piece in pieces(page.get("text") or "")]
-        vectors = embed([f"{title}\n{row['text']}" for row in rows]) if rows else []
+        vectors = _vectors(db, config, [f"{title}\n{row['text']}" for row in rows]) if rows else []
         db.chunks.delete_many({"part_id": part_id})
         if rows:
             db.chunks.insert_many([{**row, "embedding": vector} for row, vector in zip(rows, vectors)])
@@ -143,6 +168,8 @@ def _run():
         _state["error"] = None
     except Exception as error:
         _state["error"] = type(error).__name__
+        if isinstance(error, RateLimitError):  # the provider's quota is spent: asking again every minute only wastes it
+            _state["paused_until"] = time.time() + QUOTA_PAUSE
         logging.getLogger("roadwatch").warning("embedding evidence failed: %s", type(error).__name__)
 
 
@@ -151,7 +178,7 @@ def start():
     if not available():
         return
     with _lock:
-        if (_state["thread"] and _state["thread"].is_alive()) or time.time() - _state["started"] < 30:
+        if (_state["thread"] and _state["thread"].is_alive()) or time.time() - _state["started"] < 30 or time.time() < _state["paused_until"]:
             return
         _state["started"] = time.time()
         _state["thread"] = threading.Thread(target=_run, daemon=True)

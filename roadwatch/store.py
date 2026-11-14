@@ -254,9 +254,12 @@ def update_member(member_id, **fields):
 
 @_backend
 def comments(project_id):
-    """All non-deleted comments of a case; the JSON body holds author, anchor, citations and assessment fields."""
+    """All non-deleted comments of a case, or of several discussion ids at once, oldest first; the JSON body holds
+    author, anchor, citations and assessment fields."""
+    ids = [project_id] if isinstance(project_id, str) else list(project_id)
     with database() as connection:
-        rows = connection.execute("SELECT body FROM comments WHERE project_id = ? AND deleted = 0 ORDER BY created_at", (project_id,)).fetchall()
+        rows = connection.execute(f"SELECT body FROM comments WHERE project_id IN ({', '.join('?' * len(ids))}) AND deleted = 0 "
+                                  "ORDER BY created_at", ids).fetchall()
     return [json.loads(r["body"]) for r in rows]
 
 
@@ -303,8 +306,7 @@ def discussion(project):
     """The comments a case shows: the discussion shared by its set of streets, plus any posted on the case itself
     before discussions were shared."""
     shared = discussion_id(project)
-    posts = comments(shared) + (comments(project["id"]) if shared != project["id"] else [])
-    return sorted(posts, key=lambda comment: comment["created_at"])
+    return comments(shared if shared == project["id"] else [shared, project["id"]])
 
 
 @_backend

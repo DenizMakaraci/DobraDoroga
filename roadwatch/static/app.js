@@ -881,10 +881,7 @@ for (const name of ["project", "evidence", "finance", "observation"]) {
   });
 }
 async function boot() {
-  await refreshConfig();
-  cities = await api("/cities");
-  provinces = await api("/provinces").catch(() => []);
-  await refreshList();
+  [, cities, provinces] = await Promise.all([refreshConfig(), api("/cities"), api("/provinces").catch(() => []), refreshList()]);
   if (projects.length) await selectProject(projects[0].id); else render();
 }
 function showUser() {

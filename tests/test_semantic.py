@@ -74,6 +74,22 @@ def test_evidence_is_embedded_once_and_the_nearest_page_comes_first(meaning):
 
 
 @needs_mongo
+def test_text_already_embedded_is_not_sent_to_the_model_again(meaning, monkeypatch):
+    first, second = meaning
+    sent = []
+    monkeypatch.setattr(semantic, "embed", lambda texts: sent.append(list(texts)) or fake_embed(texts))
+    assert semantic.index_pending() == 2 and sum(map(len, sent)) == 3
+    third = store.create_project({"name": "Queen Street", "road": "Queen Street", "contractor": ""})
+    store.append_item(third["id"], "evidence", {"id": "evidence-z", "title": "Award report", "pages": [
+        {"number": 1, "text": "Council summary of the tender and the schedule."},                                    # seen before, word for word
+        {"number": 2, "text": "A new paragraph about streetcar track replacement."}]})
+    sent.clear()
+    assert semantic.index_pending() == 1 and sent == [["Award report\nA new paragraph about streetcar track replacement."]]
+    assert store_mongo._db().chunks.count_documents({"project_id": third["id"]}) == 2
+    assert semantic.search("streetcar track replacement")[0]["project_id"] == third["id"]
+
+
+@needs_mongo
 def test_chunks_follow_edits_and_deleted_cases(meaning):
     first, second = meaning
     db = store_mongo._db()

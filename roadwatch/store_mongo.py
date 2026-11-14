@@ -115,6 +115,13 @@ def _store(db, new):
             _remember(part["_id"], json.dumps(part["body"]))
 
 
+def warm():
+    """Download the parts every case uses into the in-memory cache, so the first person to open a case after a
+    restart does not wait for them."""
+    db = _db()
+    _bodies(db, [part_id for row in db.projects.find({}, {"parts": 1}) for part_id in _part_ids(row)])
+
+
 def _part_ids(document):
     return [part_id for kind in SPLIT for part_id in document["parts"][kind]]
 
@@ -303,8 +310,9 @@ def update_member(member_id, **fields):
 # ---- discussion -------------------------------------------------------------------------------------
 
 def comments(project_id):
-    """All non-deleted comments of a case; the body holds author, anchor, citations and assessment fields."""
-    rows = _db().comments.find({"project_id": project_id, "deleted": False}).sort("created_at", ASCENDING)
+    """All non-deleted comments of a case, or of several discussion ids at once, oldest first."""
+    ids = [project_id] if isinstance(project_id, str) else list(project_id)
+    rows = _db().comments.find({"project_id": {"$in": ids}, "deleted": False}).sort("created_at", ASCENDING)
     return [r["body"] for r in rows]
 
 
