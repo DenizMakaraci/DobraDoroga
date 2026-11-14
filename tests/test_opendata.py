@@ -582,3 +582,11 @@ def test_street_search_falls_back_to_photon_when_nominatim_does_not_answer(clien
     monkeypatch.setattr(geocode, "_photon", down)
     failed = client.get("/api/geocode", params={"q": "University Avenue"})
     assert failed.status_code == 502 and "unavailable" in failed.json()["detail"]
+    # with a city chosen, the street can still be added as typed, because records are matched by name
+    typed = client.get("/api/geocode", params={"q": "  university   avenue ", "city": "toronto"}).json()
+    assert len(typed) == 1 and typed[0]["road"] == "university avenue" and typed[0]["city_key"] == "toronto" and typed[0]["by_name"] is True
+    assert "not located on the map" in typed[0]["display_name"] and (typed[0]["latitude"], typed[0]["longitude"]) == (43.6532, -79.3832)
+    named = client.post("/api/projects", json={"name": "By name", "road": "University Avenue", "locations": [
+        {k: typed[0][k] for k in ("road", "display_name", "city_key", "latitude", "longitude", "osm_type", "osm_id", "geometry")}]})
+    assert named.status_code == 201
+    assert client.get("/api/geocode/reverse", params={"lat": 43.65, "lon": -79.38}).status_code == 502

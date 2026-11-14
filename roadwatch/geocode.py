@@ -16,7 +16,8 @@ from .opendata.common import USER_AGENT, fold
 
 NOMINATIM = "https://nominatim.openstreetmap.org"
 PHOTON = "https://photon.komoot.io"
-UNAVAILABLE = "The map search service is unavailable. Try again in a moment."
+UNAVAILABLE = ("The map search service is unavailable, so the map cannot be clicked right now. "
+               "Type the street's name in the search box and press Search to add it by name.")
 
 
 class Unavailable(Exception):
@@ -103,6 +104,15 @@ def _photon_places(features):
     return places
 
 
+def _by_name(query, module):
+    """With no map service answering, the street as typed: open data is matched by street name, so the case
+    works without the street being located. It is placed at the city centre and says so."""
+    road = " ".join(query.split())[:240]
+    return {"osm_type": None, "osm_id": None, "road": road, "city": module.NAME, "state": None, "country_code": "ca",
+            "display_name": f"{road}, {module.NAME} - added by name; map search is unavailable, so it is not located on the map",
+            "latitude": module.CENTRE[0], "longitude": module.CENTRE[1], "geometry": None, "city_key": module.KEY, "by_name": True}
+
+
 async def _fallback(reason, path, params):
     logging.getLogger("roadwatch").warning("Nominatim did not answer (%s); using Photon", reason)
     try:
@@ -124,7 +134,12 @@ async def search(query, limit=6, city=None):
         items = await _get("/search", params)
     except Unavailable as error:
         box = {"bbox": ",".join(str(v) for v in module.BBOX)} if module else {}
-        return (await _fallback(error, "/api/", {"q": params["q"], "limit": 30, **box}))[:limit]
+        try:
+            return (await _fallback(error, "/api/", {"q": params["q"], "limit": 30, **box}))[:limit]
+        except HTTPException:
+            if not module:
+                raise
+            return [_by_name(query, module)]
     places = [_place(i) for i in items if i.get("category") == "highway" and i.get("type") in HIGHWAY_TYPES]
     return places or [_place(i) for i in items]
 

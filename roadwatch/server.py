@@ -150,7 +150,7 @@ def index():
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    return {"ok": True, "commit": os.getenv("RENDER_GIT_COMMIT", "")[:7]}
 
 
 WORKSPACE_RULES = ("You will see and may write statements about named companies and people. Stick to what documents show and cite "
