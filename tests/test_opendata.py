@@ -494,3 +494,27 @@ def test_contract_limits_flag_records(client, case, offline_toronto):
     assert updated["locations"][0]["from_street"] == ""
     project = client.post(f"/api/projects/{case['id']}/open-data", json={"since_year": 2019}).json()
     assert all(r["within_limits"] is None for d in project["open_data"] for r in d["records"])
+
+
+def test_toronto_awards_are_read_from_the_nested_award_column():
+    nested = json.dumps(json.dumps([
+        {"Award_Amount": "$ 7,224,800.00", "Date_Awarded": "2024-08-23", "Successful_Bidder": "Sanscon Construction Ltd.", "city": "CONCORD"},
+        {"Award_Amount": "$1,317,169.92 CAD", "Date_Awarded": None, "AwardedDate": "2024-09-01", "Successful_Bidder": "Second Paver Inc"},
+        {"Award_Amount": "31.65/MT", "Date_Awarded": None, "Successful_Bidder": "Unit Price Ltd"}]))
+    assert toronto._awards({"Award": nested}) == [("Sanscon Construction Ltd.", 7224800.0, "2024-08-23"),
+                                                  ("Second Paver Inc", 1317169.92, "2024-09-01"), ("Unit Price Ltd", 0.0, None)]
+    assert toronto._awards({"Award": "1,563,741.85", "Successful Supplier": "CRCE CONSTRUCTION LTD"}) == [("CRCE CONSTRUCTION LTD", 1563741.85, None)]
+    assert toronto._awards({"Award": "900000", "Successful Supplier": "X"}) == [("X", 900000.0, None)]
+
+    rows = [{"Document Number": "9", "RFx (Solicitation) Type": "RFT", "Award": nested, "Award Authority Obtained Date": "", "Division": "ECS",
+             "Wards": "10", "Solicitation Document Description": "Road resurfacing on Davenport Road from Bay Street to Yonge Street"}]
+    original = toronto._csv
+    toronto._csv = lambda name, resource: rows
+    try:
+        street = toronto.awarded_contracts(["Davenport Road"], 2015)["records"]
+        supplier = toronto.supplier_awards(["Second Paver"], 2015)["records"]
+    finally:
+        toronto._csv = original
+    assert [(r["supplier"], r["amount"], r["award_date"]) for r in street] == [
+        ("SECOND PAVER INC", 1317169.92, "2024-09-01"), ("SANSCON CONSTRUCTION LTD", 7224800.0, "2024-08-23"), ("UNIT PRICE LTD", 0.0, None)]
+    assert [(r["vendor_name"], r["amount"], r["year"]) for r in supplier] == [("Second Paver Inc", 1317169.92, 2024)]

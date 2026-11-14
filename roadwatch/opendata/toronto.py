@@ -75,9 +75,25 @@ def _csv(name, resource):
 
 def _amount(value):
     try:
-        return float(str(value).replace(",", "").replace("$", "") or 0)
+        return float(re.sub(r"(?i)cad|[$,\s]", "", str(value or "")) or 0)
     except ValueError:
         return 0.0
+
+
+def _awards(row):
+    """(supplier, amount, award date) for each award on a Toronto Bids row. The City nests them as JSON in the
+    'Award' column because one solicitation can have several winners; earlier extracts had one supplier per row."""
+    raw = row.get("Award") or ""
+    try:
+        nested = json.loads(raw)
+        if isinstance(nested, str):
+            nested = json.loads(nested)
+    except ValueError:
+        nested = None
+    if not isinstance(nested, list):
+        return [(row.get("Successful Supplier"), _amount(raw), None)]
+    return [(a.get("Successful_Bidder"), _amount(a.get("Award_Amount")), a.get("Date_Awarded") or a.get("AwardedDate"))
+            for a in nested if isinstance(a, dict)]
 
 
 canonical_supplier = canonical_company
@@ -96,19 +112,21 @@ def awarded_contracts(streets, since_year):
     rows, city_road = [], Counter()
     for r in _csv("awarded", RESOURCES["awarded"]):
         text = r.get("Solicitation Document Description", "")
-        year = _year(r.get("Award Authority Obtained Date"))
-        if (year or since_year) >= since_year and any(w in text.lower() for w in ROAD_WORK_WORDS):
-            city_road[canonical_supplier(r.get("Successful Supplier"))] += 1
         street = matching_street(text, streets)
-        if street and (year is None or year >= since_year):
-            rows.append({
-                "street": street,
-                "document_number": r.get("Document Number"), "type": r.get("RFx (Solicitation) Type"),
-                "supplier": canonical_supplier(r.get("Successful Supplier")), "amount": _amount(r.get("Award")),
-                "award_date": r.get("Award Authority Obtained Date"), "division": r.get("Division"),
-                "description": " ".join(text.split())[:1200], "wards": r.get("Wards"),
-                "road_work": any(w in text.lower() for w in ROAD_WORK_WORDS),
-            })
+        for supplier, amount, awarded in _awards(r):
+            award_date = r.get("Award Authority Obtained Date") or awarded
+            year = _year(award_date)
+            if (year or since_year) >= since_year and any(w in text.lower() for w in ROAD_WORK_WORDS):
+                city_road[canonical_supplier(supplier)] += 1
+            if street and (year is None or year >= since_year):
+                rows.append({
+                    "street": street,
+                    "document_number": r.get("Document Number"), "type": r.get("RFx (Solicitation) Type"),
+                    "supplier": canonical_supplier(supplier), "amount": amount,
+                    "award_date": award_date, "division": r.get("Division"),
+                    "description": " ".join(text.split())[:1200], "wards": r.get("Wards"),
+                    "road_work": any(w in text.lower() for w in ROAD_WORK_WORDS),
+                })
     rows.sort(key=lambda r: r["award_date"] or "", reverse=True)
     total_city = sum(city_road.values()) or 1
     result = dataset_result(
@@ -570,16 +588,18 @@ def supplier_awards(names, since_year):
     matches = company_matcher(names)
     rows = []
     for r in _csv("awarded", RESOURCES["awarded"]):
-        year = _year(r.get("Award Authority Obtained Date"))
-        if not matches(r.get("Successful Supplier")) or (year is not None and year < since_year):
-            continue
         text = " ".join(r.get("Solicitation Document Description", "").split())
-        rows.append({
-            "city": NAME, "vendor": canonical_supplier(r.get("Successful Supplier")), "vendor_name": r.get("Successful Supplier"),
-            "document_number": r.get("Document Number"), "type": r.get("RFx (Solicitation) Type"), "amount": _amount(r.get("Award")),
-            "award_date": r.get("Award Authority Obtained Date"), "year": year, "division": r.get("Division"),
-            "description": text[:600], "road_work": any(w in text.lower() for w in ROAD_WORK_WORDS),
-        })
+        for supplier, amount, awarded in _awards(r):
+            award_date = r.get("Award Authority Obtained Date") or awarded
+            year = _year(award_date)
+            if not matches(supplier) or (year is not None and year < since_year):
+                continue
+            rows.append({
+                "city": NAME, "vendor": canonical_supplier(supplier), "vendor_name": supplier,
+                "document_number": r.get("Document Number"), "type": r.get("RFx (Solicitation) Type"), "amount": amount,
+                "award_date": award_date, "year": year, "division": r.get("Division"),
+                "description": text[:600], "road_work": any(w in text.lower() for w in ROAD_WORK_WORDS),
+            })
     rows.sort(key=lambda r: r["award_date"] or "", reverse=True)
     result = dataset_result(
         key="city_awards", title=f"Toronto Bids - contracts awarded to {names[0] if names else 'the supplier'}",
