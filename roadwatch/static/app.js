@@ -410,7 +410,12 @@ function renderNewCaseStreets() {
 function pickNewCaseStreet(place) {
   const form = $("#project-form");
   if (!place.city_key) { drawPlaces(newCasePlaces, place); return notify(unsupportedCity(place) + " You can still create the case and attach documents manually.", true); }
-  if (place.city_key !== $("#new-case-city").value) return notify(`That street is in ${cityOf(place.city_key).name}; switch the city selector to add it.`, true);
+  const select = $("#new-case-city");
+  if (place.city_key !== select.value) {
+    if (newCasePlaces.length) return notify(`That street is in ${cityOf(place.city_key).name}, but this case already has a street in ${cityOf(select.value).name}. A case covers one city.`, true);
+    select.value = place.city_key; localStorage.setItem("roadwatch.city", place.city_key); mountCondition(place.city_key);
+    notify(`City switched to ${cityOf(place.city_key).name} to match that street.`);
+  }
   if (newCasePlaces.length && newCasePlaces[0].city_key !== place.city_key) return notify("All streets in a case must be in the same city.", true);
   if (newCasePlaces.some(p => (p.road || "").toLowerCase() === (place.road || "").toLowerCase())) return notify(`${place.road} is already in the list.`, true);
   newCasePlaces.push(place);
