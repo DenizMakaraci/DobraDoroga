@@ -57,6 +57,7 @@ def test_accounts_invites_passwords_and_roles(admin):
     assert anon.get(f"/api/invite/{code}").status_code == 410  # single use
 
     assert TestClient(app).post("/api/login", json={"email": "jane@example.org", "password": "wrong password"}).status_code == 401
+    assert TestClient(app).get("/api/session").json()["accounts"] is True
     jane = signed_in_as("JANE@example.org", "long enough passphrase")
     assert jane.get("/api/session").json()["user"]["name"] == "Jane Counsel"
     assert jane.post("/api/members", json={"name": "x", "email": "x@example.org"}).status_code == 403  # not an admin

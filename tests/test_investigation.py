@@ -255,6 +255,7 @@ def test_access_key_gates_api_and_sessions_work(tmp_path, monkeypatch):
         assert client.get("/api/projects").status_code == 401
         session = client.get("/api/session").json()
         assert session["auth_required"] is True and session["signed_in"] is False and session["user"] is None
+        assert session["accounts"] is False  # nobody has a password yet: the sign-in form opens on the access key
         assert client.get("/healthz").status_code == 200
         assert client.post("/api/login", json={"access_key": "wrong"}).status_code == 401
         assert client.post("/api/login", json={"access_key": "correct-horse"}).status_code == 200

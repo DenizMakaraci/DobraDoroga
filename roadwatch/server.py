@@ -128,7 +128,8 @@ def session(request: Request):
     user = request.state.user
     return {"auth_required": auth.enabled(), "signed_in": user is not None, "user": user,
             "signup_open": auth.enabled() and auth.signup_open(), "signup_role": auth.signup_role(),
-            "email_enabled": auth.smtp_configured(), "rules": WORKSPACE_RULES}
+            "email_enabled": auth.smtp_configured(), "rules": WORKSPACE_RULES,
+            "accounts": auth.enabled() and user is None and any(m["has_password"] for m in store.members())}
 
 
 @app.post("/api/signup", status_code=201)

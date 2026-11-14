@@ -39,7 +39,13 @@ function notify(message, error = false) {
   clearTimeout(notify.timer); notify.timer = setTimeout(() => { notice.hidden = true; }, 8000);
 }
 function closeDialog(dialog) { document.body.appendChild($("#notice")); dialog.close(); }
-function showLogin() { const d = $("#login-dialog"); $("#signup-link").hidden = !sessionInfo.signup_open; if (!d.open) d.showModal(); }
+function setLoginMode(byKey) {
+  $("[data-login-mode='key']").hidden = !byKey; $("[data-login-mode='password']").hidden = byKey;
+  $("[data-action='forgot-password']").hidden = byKey;
+  $("[data-action='toggle-login-mode']").textContent = byKey ? "Use email and password instead" : "Use an access key instead";
+}
+// Until someone has an email and password, the only way in is the administrator's access key: open on that.
+function showLogin() { const d = $("#login-dialog"); $("#signup-link").hidden = !sessionInfo.signup_open; if (!d.open) { setLoginMode(sessionInfo.accounts === false); d.showModal(); } }
 function showSignup() {
   closeDialog($("#login-dialog"));
   $("#signup-role-help").textContent = `New accounts start as ${sessionInfo.signup_role || "viewer"}: you can read every case and take part in the discussion. An administrator can give you the investigator role.${sessionInfo.email_enabled ? " You will need to confirm your email address." : ""}`;
@@ -673,7 +679,7 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.action === "account") { $("#profile-form").name.value = me?.name || ""; $("#account-title").textContent = me?.email ? `${me.name} · ${me.email}` : "Your account"; return $("#account-dialog").showModal(); }
     if (button.dataset.action === "show-signup") return showSignup();
     if (button.dataset.action === "show-login") { closeDialog($("#signup-dialog")); return showLogin(); }
-    if (button.dataset.action === "toggle-login-mode") { const key = $("[data-login-mode='key']"), pw = $("[data-login-mode='password']"); key.hidden = !key.hidden; pw.hidden = !key.hidden; button.textContent = key.hidden ? "Use an access key instead" : "Use email and password instead"; return; }
+    if (button.dataset.action === "toggle-login-mode") return setLoginMode($("[data-login-mode='key']").hidden);
     if (button.dataset.action === "forgot-password") {
       const email = $("#login-form").email.value.trim(); if (!email) return notify("Enter your email first.", true);
       const answer = await api("/password/forgot", "POST", { email }); return notify(answer.message);
