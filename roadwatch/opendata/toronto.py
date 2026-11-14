@@ -509,33 +509,44 @@ def lobbying(suppliers, streets, since_year):
     for member in archive.namelist():
         if not member.lower().endswith(".xml"):
             continue
-        root = ET.fromstring(archive.read(member).decode("utf-8-sig"))
-        for sm in root.iter("SM"):
-            firms = [_text(f, "Name") for f in sm.findall("Firms/Firm")]
-            particulars = " ".join(_text(sm, "Particulars").split())
-            supplier = next((f for f in firms if canonical_supplier(f) in wanted), None)
-            street = matching_street(particulars, streets)
-            subject = _text(sm, "SubjectMatter")
-            relevant = supplier or (street and (any(w in particulars.lower() for w in LOBBY_ROAD_WORDS)
-                                               or any(w in subject.lower() for w in ("procurement", "infrastructure", "transportation", "construction"))))
-            if not relevant:
-                continue
-            comms = sm.findall("Communications/Communication")
-            dates = sorted(d for d in (_text(c, "CommunicationDate") for c in comms) if d)
-            year = _year(dates[-1] if dates else _text(sm, "EffectiveDate") or _text(sm, "InitialApprovalDate"))
-            if year is not None and year < since_year:
-                continue
-            officials = Counter(f"{_text(c, 'POH_Name')} ({_text(c, 'POH_Office')})".strip(" ()")
-                                for c in comms if _text(c, "POH_Name"))
-            rows.append({
-                "street": street, "supplier": canonical_supplier(supplier) if supplier else None,
-                "sm_number": _text(sm, "SMNumber"), "status": _text(sm, "Status"), "type": _text(sm, "Type"),
-                "client": "; ".join(firms)[:300], "subject": subject,
-                "particulars": particulars[:600], "registrant": f"{_text(sm, 'Registrant/FirstName')} {_text(sm, 'Registrant/LastName')}".strip(),
-                "first_communication": dates[0] if dates else None, "last_communication": dates[-1] if dates else None,
-                "communications": len(comms),
-                "officials_lobbied": "; ".join(f"{name} x{n}" for name, n in officials.most_common(6)),
-            })
+        # The registry is about 200 MB of XML: read it as a stream and drop each subject matter once it has been
+        # looked at, instead of holding the whole tree (about 1.8 GB) in memory.
+        with archive.open(member) as stream:
+            path = []
+            for event, sm in ET.iterparse(stream, events=("start", "end")):
+                if event == "start":
+                    path.append(sm)
+                    continue
+                path.pop()
+                if sm.tag != "SM":
+                    continue
+                if path:
+                    path[-1].remove(sm)
+                firms = [_text(f, "Name") for f in sm.findall("Firms/Firm")]
+                particulars = " ".join(_text(sm, "Particulars").split())
+                supplier = next((f for f in firms if canonical_supplier(f) in wanted), None)
+                street = matching_street(particulars, streets)
+                subject = _text(sm, "SubjectMatter")
+                relevant = supplier or (street and (any(w in particulars.lower() for w in LOBBY_ROAD_WORDS)
+                                                   or any(w in subject.lower() for w in ("procurement", "infrastructure", "transportation", "construction"))))
+                if not relevant:
+                    continue
+                comms = sm.findall("Communications/Communication")
+                dates = sorted(d for d in (_text(c, "CommunicationDate") for c in comms) if d)
+                year = _year(dates[-1] if dates else _text(sm, "EffectiveDate") or _text(sm, "InitialApprovalDate"))
+                if year is not None and year < since_year:
+                    continue
+                officials = Counter(f"{_text(c, 'POH_Name')} ({_text(c, 'POH_Office')})".strip(" ()")
+                                    for c in comms if _text(c, "POH_Name"))
+                rows.append({
+                    "street": street, "supplier": canonical_supplier(supplier) if supplier else None,
+                    "sm_number": _text(sm, "SMNumber"), "status": _text(sm, "Status"), "type": _text(sm, "Type"),
+                    "client": "; ".join(firms)[:300], "subject": subject,
+                    "particulars": particulars[:600], "registrant": f"{_text(sm, 'Registrant/FirstName')} {_text(sm, 'Registrant/LastName')}".strip(),
+                    "first_communication": dates[0] if dates else None, "last_communication": dates[-1] if dates else None,
+                    "communications": len(comms),
+                    "officials_lobbied": "; ".join(f"{name} x{n}" for name, n in officials.most_common(6)),
+                })
     rows.sort(key=lambda r: (r["supplier"] is None, -(int((r["last_communication"] or "0000")[:4]))))
     return dataset_result(
         key="lobbying", title=f"Toronto Lobbyist Registry - {_label(streets)} and its suppliers",

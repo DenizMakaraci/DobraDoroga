@@ -21,8 +21,8 @@ const GRADE_COLOURS = { 1: "#1a9850", 2: "#91cf60", 3: "#fee08b", 4: "#fc8d59", 
 const cityOf = key => cities.find(c => c.key === key) || cities[0] || { key: "toronto", name: "Toronto", centre: [43.6532, -79.3832] };
 function caseCity() { return cityOf(current?.locations?.[0]?.city_key || current?.open_data?.[0]?.city_key || localStorage.getItem("roadwatch.city")); }
 
-async function api(path, method = "GET", body) {
-  const response = await fetch(`/api${path}`, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+async function api(path, method = "GET", body, signal) {
+  const response = await fetch(`/api${path}`, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined, signal });
   if (!response.ok) {
     let data;
     try { data = await response.json(); } catch { throw new Error(`Request failed (${response.status}).`); }
@@ -465,9 +465,11 @@ async function pullOpenData() {
   const since = newCaseSince || Number($("#since-year")?.value || 2000);
   newCaseSince = 0;
   busy = "opendata"; render();
-  try { current = await api(`/projects/${current.id}/open-data`, "POST", { since_year: since }); notify("Open data stored as documents. Run the investigation to analyse it."); }
-  catch (error) { notify(error.message, true); }
-  finally { busy = false; render(); }
+  // A pull that has not answered in six minutes never will (the server stops at four): say so instead of spinning for ever.
+  const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 360000);
+  try { current = await api(`/projects/${current.id}/open-data`, "POST", { since_year: since }, stop.signal); notify("Open data stored as documents. Run the investigation to analyse it."); }
+  catch (error) { notify(error.name === "AbortError" ? "The pull did not finish within six minutes, so it was stopped. The server may have restarted; reload the page and try again." : error.message, true); }
+  finally { clearTimeout(timer); busy = false; render(); }
 }
 // ---- Team discussion -------------------------------------------------------------------------
 function statusOf(key) { return (discussion?.statuses || []).find(s => s.finding_key === key); }
