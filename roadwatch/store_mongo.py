@@ -9,9 +9,12 @@ retried otherwise, which is this backend's equivalent of store.py's BEGIN IMMEDI
 
 import json
 import os
+import threading
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 
+import certifi
 from pymongo import ASCENDING, MongoClient
 from pymongo.collation import Collation
 from pymongo.errors import DuplicateKeyError
@@ -25,13 +28,18 @@ MEMBER_FIELDS = ("name", "role", "active", "key_hash", "email", "password_hash",
 PUBLIC_MEMBER = ("name", "role", "email", "created_at", "active", "last_login", "verified")
 SECRET_MEMBER = ("password_hash", "invite_hash", "invite_expires", "token_salt", "key_hash")
 
+CACHE_CHARACTERS = 300_000_000
+
 _clients, _ready = {}, set()
+_parts, _parts_lock, _parts_size = OrderedDict(), threading.Lock(), 0
 
 
 def _db():
     uri = os.environ["ROADWATCH_MONGODB_URI"]
     if uri not in _clients:
-        _clients[uri] = MongoClient(uri, serverSelectionTimeoutMS=8000, appname="roadwatch")
+        encrypted = uri.startswith("mongodb+srv://") or "tls=true" in uri.lower() or "ssl=true" in uri.lower()
+        _clients[uri] = MongoClient(uri, serverSelectionTimeoutMS=8000, appname="roadwatch", compressors="zlib",
+                                    **({"tlsCAFile": certifi.where()} if encrypted else {}))
     name = os.environ.get("ROADWATCH_MONGODB_DB") or _clients[uri].get_default_database(default="roadwatch").name
     db = _clients[uri][name]
     if (uri, name) not in _ready:
@@ -64,9 +72,43 @@ def _split(project_id, project, known=None):
             part_id = known.get(fingerprint)
             if not part_id:
                 part_id = known[fingerprint] = f"part-{uuid.uuid4().hex}"
-                new.append({"_id": part_id, "project_id": project_id, "kind": kind, "body": json.loads(fingerprint[1])})
+                new.append({"_id": part_id, "project_id": project_id, "kind": kind, "body": json.loads(json.dumps(item))})
             manifest[kind].append(part_id)
     return _plain({k: v for k, v in project.items() if k not in SPLIT}), manifest, new
+
+
+def _remember(part_id, text):
+    global _parts_size
+    with _parts_lock:
+        if part_id not in _parts:
+            _parts[part_id] = text
+            _parts_size += len(text)
+            while _parts_size > CACHE_CHARACTERS and len(_parts) > 1:
+                _parts_size -= len(_parts.popitem(last=False)[1])
+
+
+def _bodies(db, wanted):
+    """Part bodies by id. A part is never modified after it is written (an edit stores a new one), so bodies are
+    kept in memory as JSON text and only the ones not seen yet are downloaded."""
+    texts = {}
+    with _parts_lock:
+        for part_id in wanted:
+            if part_id in _parts:
+                _parts.move_to_end(part_id)
+                texts[part_id] = _parts[part_id]
+    missing = [part_id for part_id in wanted if part_id not in texts]
+    if missing:
+        for part in db.parts.find({"_id": {"$in": missing}}):
+            texts[part["_id"]] = json.dumps(part["body"])
+            _remember(part["_id"], texts[part["_id"]])
+    return {part_id: json.loads(part_text) for part_id, part_text in texts.items()}
+
+
+def _store(db, new):
+    if new:
+        db.parts.insert_many(new)
+        for part in new:
+            _remember(part["_id"], json.dumps(part["body"]))
 
 
 def _part_ids(document):
@@ -80,7 +122,7 @@ def _read(db, project_id):
         if not document:
             return None, None
         wanted = _part_ids(document)
-        found = {p["_id"]: p["body"] for p in db.parts.find({"_id": {"$in": wanted}})} if wanted else {}
+        found = _bodies(db, wanted)
         if all(part_id in found for part_id in wanted):
             return document, {**document["body"], **{kind: [found[i] for i in document["parts"][kind]] for kind in SPLIT}}
     raise RuntimeError(f"Case {project_id} kept changing while it was being read.")
@@ -114,7 +156,7 @@ def list_projects():
     db = _db()
     for _ in range(20):
         documents = list(db.projects.find().sort("created_at", -1))
-        parts = {p["_id"]: p["body"] for p in db.parts.find()}
+        parts = _bodies(db, [part_id for d in documents for part_id in _part_ids(d)])
         if all(part_id in parts for d in documents for part_id in _part_ids(d)):
             return [{**d["body"], **{kind: [parts[i] for i in d["parts"][kind]] for kind in SPLIT}} for d in documents]
     raise RuntimeError("Cases kept changing while they were being listed.")
@@ -139,8 +181,7 @@ def create_project(fields, *, demo=False):
     }
     db = _db()
     body, manifest, new = _split(project["id"], project)
-    if new:
-        db.parts.insert_many(new)
+    _store(db, new)
     db.projects.insert_one({"_id": project["id"], "created_at": project["created_at"], "writes": 0, "body": body, "parts": manifest})
     return project
 
@@ -157,8 +198,7 @@ def mutate(project_id, callback):
                  for kind in SPLIT for part_id, item in zip(document["parts"][kind], project[kind])}
         callback(project)
         body, manifest, new = _split(project_id, project, known)
-        if new:
-            db.parts.insert_many(new)
+        _store(db, new)
         committed = db.projects.update_one({"_id": project_id, "writes": document["writes"]},
                                            {"$set": {"body": body, "parts": manifest}, "$inc": {"writes": 1}}).matched_count
         dropped = set(_part_ids(document)) - {i for ids in manifest.values() for i in ids} if committed else {p["_id"] for p in new}

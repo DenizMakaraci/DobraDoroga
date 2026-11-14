@@ -36,8 +36,7 @@ def migrate(replace=False):
         usage = [dict(row) for row in connection.execute("SELECT * FROM ai_usage")]
     for project in projects:
         body, manifest, parts = store_mongo._split(project["id"], project)
-        if parts:
-            db.parts.insert_many(parts)
+        store_mongo._store(db, parts)
         db.projects.insert_one({"_id": project["id"], "created_at": project["created_at"], "writes": 0, "body": body, "parts": manifest})
     if members:
         db.members.insert_many([{"_id": m.pop("id"), **m} for m in members])

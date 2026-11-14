@@ -36,7 +36,9 @@ def test_case_round_trip_keeps_awkward_field_names_and_splits_large_lists():
     store.append_item(project["id"], "open_data", {"key": "awarded", "records": [record], "total": 1})
     store.append_item(project["id"], "finances", {"amount": 10})
     saved = store.get_project(project["id"])
-    assert saved["open_data"][0]["records"][0] == record
+    assert saved["open_data"][0]["records"][0] == record and list(saved["open_data"][0]["records"][0]) == list(record)
+    store_mongo._parts.clear()
+    assert store.get_project(project["id"]) == saved and list(store.get_project(project["id"])["open_data"][0]["records"][0]) == list(record)
     assert saved["evidence"][0]["pages"][0]["text"] == "Award date: 2024-08-16"
     assert saved["revision"] == 3 and saved["finances"] == [{"amount": 10}]
     core = db.projects.find_one({"_id": project["id"]})
