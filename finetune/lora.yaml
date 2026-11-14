@@ -1,0 +1,28 @@
+# LoRA fine-tune of Qwen3-14B for the roadwatch investigation task (mlx-lm).
+# Sized for a 24 GB MacBook: 4-bit base + adapters on the last 16 layers.
+# Usage:  .venv/bin/python -m mlx_lm.lora -c finetune/lora.yaml
+
+model: "mlx-community/Qwen3-14B-MLX-4bit"
+data: "finetune/data"
+adapter_path: "finetune/adapters"
+train: true
+fine_tune_type: "lora"
+
+num_layers: 16            # transformer layers to adapt (from the top)
+batch_size: 1             # case contexts are long; keep memory low
+iters: 800                # ~2-3 epochs over a few hundred examples
+learning_rate: 1.0e-5
+max_seq_length: 8192      # case contexts carry dossiers + checks; truncation loses citations
+grad_checkpoint: true
+
+lora_parameters:
+  rank: 16
+  scale: 16.0
+  dropout: 0.0
+  keys: ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj",
+         "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj"]
+
+val_batches: 20
+steps_per_report: 20
+steps_per_eval: 200
+save_every: 200
