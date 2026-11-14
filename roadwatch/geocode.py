@@ -1,6 +1,11 @@
 """Street lookup through OpenStreetMap Nominatim, proxied server-side so the browser never talks to a
-third party and the usage policy (identifying User-Agent, about 1 request/second) is honoured."""
+third party and the usage policy (identifying User-Agent, about 1 request/second) is honoured.
+
+Nominatim's public server turns away some shared hosting addresses. When it does not answer, the same lookup
+goes to Photon (photon.komoot.io), another free search over OpenStreetMap; it returns a street as a point
+without its line, so the map shows a marker instead of the highlighted road."""
 import asyncio
+import logging
 import time
 
 import httpx
@@ -10,6 +15,12 @@ from .opendata import CITIES
 from .opendata.common import USER_AGENT, fold
 
 NOMINATIM = "https://nominatim.openstreetmap.org"
+PHOTON = "https://photon.komoot.io"
+UNAVAILABLE = "The map search service is unavailable. Try again in a moment."
+
+
+class Unavailable(Exception):
+    pass
 HIGHWAY_TYPES = {"motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential",
                  "living_street", "service", "road", "pedestrian", "track", "cycleway", "busway"}
 _lock = asyncio.Lock()
@@ -50,12 +61,55 @@ async def _get(path, params):
         if wait > 0:
             await asyncio.sleep(wait)
         _last_call = time.monotonic()
-        async with httpx.AsyncClient(timeout=20, headers={"User-Agent": USER_AGENT}) as client:
-            response = await client.get(f"{NOMINATIM}{path}", params={**params, "format": "jsonv2",
-                                                                         "addressdetails": 1})
+        try:
+            async with httpx.AsyncClient(timeout=20, headers={"User-Agent": USER_AGENT}) as client:
+                response = await client.get(f"{NOMINATIM}{path}", params={**params, "format": "jsonv2",
+                                                                             "addressdetails": 1})
+        except httpx.HTTPError as error:
+            raise Unavailable(type(error).__name__)
     if response.status_code != 200:
-        raise HTTPException(502, "The map search service is unavailable. Try again in a moment.")
+        raise Unavailable(f"HTTP {response.status_code}")
     return response.json()
+
+
+async def _photon(path, params):
+    try:
+        async with httpx.AsyncClient(timeout=20, headers={"User-Agent": USER_AGENT}) as client:
+            response = await client.get(f"{PHOTON}{path}", params={**params, "osm_tag": "highway"})
+    except httpx.HTTPError as error:
+        raise Unavailable(type(error).__name__)
+    if response.status_code != 200:
+        raise Unavailable(f"HTTP {response.status_code}")
+    return response.json().get("features", [])
+
+
+def _photon_places(features):
+    """Photon features as places, one per street name and city (Photon lists every segment of a street)."""
+    places, seen = [], set()
+    for feature in features:
+        p, point = feature.get("properties", {}), feature.get("geometry", {}).get("coordinates") or []
+        if p.get("osm_key") != "highway" or p.get("osm_value") not in HIGHWAY_TYPES or not p.get("name") or len(point) != 2:
+            continue
+        if (p.get("countrycode") or "").upper() != "CA" or (fold(p["name"]), p.get("city")) in seen:
+            continue
+        seen.add((fold(p["name"]), p.get("city")))
+        display = ", ".join(part for part in (p["name"], p.get("district"), p.get("city"), p.get("state"), p.get("country")) if part)
+        places.append({
+            "osm_type": {"W": "way", "N": "node", "R": "relation"}.get(p.get("osm_type")), "osm_id": p.get("osm_id"),
+            "display_name": display, "road": p["name"], "city": p.get("city"), "state": p.get("state"), "country_code": "ca",
+            "latitude": float(point[1]), "longitude": float(point[0]), "geometry": None,
+            "city_key": city_key({"city": p.get("city"), "county": p.get("county")}, display),
+        })
+    return places
+
+
+async def _fallback(reason, path, params):
+    logging.getLogger("roadwatch").warning("Nominatim did not answer (%s); using Photon", reason)
+    try:
+        return _photon_places(await _photon(path, params))
+    except Unavailable as error:
+        logging.getLogger("roadwatch").warning("Photon did not answer either (%s)", error)
+        raise HTTPException(502, UNAVAILABLE)
 
 
 async def search(query, limit=6, city=None):
@@ -66,13 +120,23 @@ async def search(query, limit=6, city=None):
         params.update({"viewbox": f"{west},{north},{east},{south}", "bounded": 1})
         if fold(module.NAME) not in fold(query):
             params["q"] = f"{query}, {module.NAME}"
-    items = await _get("/search", params)
+    try:
+        items = await _get("/search", params)
+    except Unavailable as error:
+        box = {"bbox": ",".join(str(v) for v in module.BBOX)} if module else {}
+        return (await _fallback(error, "/api/", {"q": params["q"], "limit": 30, **box}))[:limit]
     places = [_place(i) for i in items if i.get("category") == "highway" and i.get("type") in HIGHWAY_TYPES]
     return places or [_place(i) for i in items]
 
 
 async def reverse(latitude, longitude):
-    item = await _get("/reverse", {"lat": latitude, "lon": longitude, "zoom": 17, "polygon_geojson": 1})
+    try:
+        item = await _get("/reverse", {"lat": latitude, "lon": longitude, "zoom": 17, "polygon_geojson": 1})
+    except Unavailable as error:
+        places = await _fallback(error, "/reverse", {"lat": latitude, "lon": longitude, "limit": 5, "radius": 0.2})
+        if not places:
+            raise HTTPException(404, "No street found at that point.")
+        return places[0]
     if "error" in item:
         raise HTTPException(404, "No street found at that point.")
     return _place(item)

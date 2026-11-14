@@ -544,3 +544,41 @@ def test_winters_before_a_station_opened_come_from_the_earlier_station_not_zero(
     assert by_season["2001-02"]["days"] == 181 and by_season["2001-02"]["freeze_thaw_days"] > 80
     assert by_season["2002-03"]["freeze_thaw_days"] == 0 and by_season["2002-03"]["days"] == 181
     assert "earlier station Toronto" in filled["pages"][0]["text"]
+
+
+def test_street_search_falls_back_to_photon_when_nominatim_does_not_answer(client, monkeypatch):
+    features = [
+        {"properties": {"osm_type": "W", "osm_id": 1, "osm_key": "highway", "osm_value": "primary", "name": "University Avenue",
+                        "city": "Toronto", "state": "Ontario", "country": "Canada", "countrycode": "CA"}, "geometry": {"type": "Point", "coordinates": [-79.3886, 43.6551]}},
+        {"properties": {"osm_type": "W", "osm_id": 2, "osm_key": "highway", "osm_value": "primary", "name": "University Avenue",
+                        "city": "Toronto", "countrycode": "CA"}, "geometry": {"type": "Point", "coordinates": [-79.39, 43.66]}},      # another segment
+        {"properties": {"osm_type": "N", "osm_id": 3, "osm_key": "highway", "osm_value": "bus_stop", "name": "University Avenue",
+                        "city": "Toronto", "countrycode": "CA"}, "geometry": {"type": "Point", "coordinates": [-79.38, 43.65]}},      # not a road
+        {"properties": {"osm_type": "W", "osm_id": 4, "osm_key": "highway", "osm_value": "residential", "name": "University Avenue",
+                        "city": "Waterloo", "countrycode": "CA"}, "geometry": {"type": "Point", "coordinates": [-80.52, 43.47]}},
+    ]
+    asked = []
+
+    async def refused(path, params):
+        raise geocode.Unavailable("HTTP 403")
+
+    async def photon(path, params):
+        asked.append((path, params))
+        return features
+    monkeypatch.setattr(geocode, "_get", refused)
+    monkeypatch.setattr(geocode, "_photon", photon)
+    found = client.get("/api/geocode", params={"q": "University Avenue", "city": "toronto"}).json()
+    assert [(p["road"], p["city"], p["city_key"], p["osm_type"], p["geometry"]) for p in found] == [
+        ("University Avenue", "Toronto", "toronto", "way", None), ("University Avenue", "Waterloo", None, "way", None)]
+    assert asked[0][0] == "/api/" and asked[0][1]["bbox"] == "-79.64,43.58,-79.11,43.86" and asked[0][1]["q"] == "University Avenue, Toronto"
+    clicked = client.get("/api/geocode/reverse", params={"lat": 43.6551, "lon": -79.3886}).json()
+    assert clicked["road"] == "University Avenue" and clicked["city_key"] == "toronto" and asked[-1][0] == "/reverse"
+    case = client.post("/api/projects", json={"name": "Fallback case", "road": "University Avenue", "locations": [
+        {k: found[0][k] for k in ("road", "display_name", "city_key", "latitude", "longitude", "osm_type", "osm_id", "geometry")}]})
+    assert case.status_code == 201 and case.json()["locations"][0]["road"] == "University Avenue"
+
+    async def down(path, params):
+        raise geocode.Unavailable("ConnectTimeout")
+    monkeypatch.setattr(geocode, "_photon", down)
+    failed = client.get("/api/geocode", params={"q": "University Avenue"})
+    assert failed.status_code == 502 and "unavailable" in failed.json()["detail"]
