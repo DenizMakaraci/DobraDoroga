@@ -889,7 +889,11 @@ function showUser() {
   $("#whoami").textContent = isGuest() ? "Working as a guest" : me ? `Signed in as ${me.name} · ${me.role}` : "";
   $("#logout-button").textContent = isGuest() ? "Sign in" : "Sign out";
   $("#team-button").hidden = !(me && me.role === "admin");
-  $("#account-button").hidden = !(me && !["admin", "local"].includes(me.id));
+  $("#account-button").hidden = !(me && !["admin", "local", "guest"].includes(me.id));
+  // The sidebar footer is hidden on a phone, so the way in (for a guest) and out lives in the top bar too.
+  const session = $("#session-button");
+  session.hidden = !(sessionInfo.auth_required && me); session.textContent = isGuest() ? "Sign in" : "Sign out";
+  session.classList.toggle("phone-only", !isGuest());
 }
 async function init() {
   try {

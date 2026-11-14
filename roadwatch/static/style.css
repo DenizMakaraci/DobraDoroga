@@ -187,3 +187,5 @@ table.tiers td.amount{text-align:right;font-variant-numeric:tabular-nums;white-s
 .search-hit small{font-weight:400;color:var(--muted);margin-left:6px}#search-results .mode-tabs{max-width:320px}
 .section-header>div:first-child{flex:1 1 240px;min-width:0}.section-header .actions{justify-content:flex-end;align-items:center}.section-header .actions .primary,.section-header .actions .secondary{padding-block:10px;line-height:22px}
 .login-dialog .guest-entry{width:100%;margin-top:14px;text-align:center}
+.session-button{padding:6px 14px;font-size:12px;letter-spacing:0;margin-left:14px;flex-shrink:0}.session-button[hidden],.session-button.phone-only{display:none}
+@media(max-width:700px){.session-button.phone-only:not([hidden]){display:inline-block}}
