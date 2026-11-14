@@ -29,6 +29,7 @@ CENTRE = (43.6532, -79.3832)
 BBOX = (-79.64, 43.58, -79.11, 43.86)  # west, south, east, north
 PORTAL = "https://open.toronto.ca/"
 CLIMATE_STATION = (31688, "Toronto City")
+CLIMATE_EARLIER = (5051, "Toronto", 2003)  # Toronto City has no temperatures before June 2002
 CKAN = "https://ckan0.cf.opendata.inter.prod-toronto.ca"
 RESOURCES = {
     "building_permits": "6d0229af-bc54-46de-9c2b-26759b01dd05",
@@ -574,7 +575,7 @@ def profile(streets, since_year):
                       ("development", lambda: development(streets, since_year)),
                       ("traffic", lambda: traffic(streets)),
                       ("integrity", lambda: integrity(suppliers, streets)),
-                      ("climate", lambda: climate.seasons(*CLIMATE_STATION, since_year, PAGES["climate"]))]:
+                      ("climate", lambda: climate.seasons(*CLIMATE_STATION, since_year, PAGES["climate"], earlier=CLIMATE_EARLIER))]:
         try:
             results.append(step())
         except Exception as error:

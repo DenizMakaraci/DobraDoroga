@@ -29,6 +29,7 @@ CENTRE = (45.5019, -73.5674)
 BBOX = (-73.98, 45.40, -73.47, 45.71)
 PORTAL = "https://donnees.montreal.ca/"
 CLIMATE_STATION = (51157, "Montréal-Trudeau Intl A")
+CLIMATE_EARLIER = (5415, "Montréal/Pierre Elliott Trudeau Intl A", 2013)  # the current station starts in February 2013
 RENA_URL = ("https://www.donneesquebec.ca/recherche/dataset/registre-des-entreprises-non-admissibles-aux-contrats-publics-rena/"
             "resource/c8843f2e-16ef-4dfe-a5e3-4b4089fc3f9e/download/rena.json")
 CKAN = "https://donnees.montreal.ca/api/3/action"
@@ -630,7 +631,7 @@ def profile(streets, since_year):
                       ("integrity", lambda: integrity(suppliers, streets)),
                       ("development", lambda: development(streets, since_year)),
                       ("traffic", lambda: traffic(streets)),
-                      ("climate", lambda: climate.seasons(*CLIMATE_STATION, since_year, PAGES["climate"]))]:
+                      ("climate", lambda: climate.seasons(*CLIMATE_STATION, since_year, PAGES["climate"], earlier=CLIMATE_EARLIER))]:
         try:
             results.append(step())
         except Exception as error:

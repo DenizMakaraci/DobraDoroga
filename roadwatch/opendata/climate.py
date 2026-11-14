@@ -31,7 +31,13 @@ def season_of(day):
     return f"{year - 1}-{str(year)[2:]}"
 
 
-def seasons(station_id, station_name, since_year, source_url):
+def _observed(row):
+    return _float(row.get("Max Temp (°C)")) is not None and _float(row.get("Min Temp (°C)")) is not None
+
+
+def seasons(station_id, station_name, since_year, source_url, earlier=None):
+    """Winter summaries. `earlier` is (station id, name, last year) of the station that preceded this one: days this
+    station did not record are taken from it, so a winter before the station opened is not read as a winter without frost."""
     totals = defaultdict(lambda: {"freeze_thaw_days": 0, "days_below_minus10": 0, "precip_mm": 0.0, "snow_cm": 0.0,
                                   "rain_on_frozen_days": 0, "days": 0})
     today = date.today()
@@ -40,6 +46,12 @@ def seasons(station_id, station_name, since_year, source_url):
             rows = daily_rows(station_id, year)
         except Exception:
             continue
+        if earlier and year <= earlier[2]:
+            try:
+                older = {r.get("Date/Time", "")[:10]: r for r in daily_rows(earlier[0], year)}
+            except Exception:
+                older = {}
+            rows = [r if _observed(r) else older.get(r.get("Date/Time", "")[:10], r) for r in rows]
         for r in rows:
             try:
                 day = date.fromisoformat(r.get("Date/Time", "")[:10])
@@ -50,8 +62,8 @@ def seasons(station_id, station_name, since_year, source_url):
             tmax, tmin = _float(r.get("Max Temp (°C)")), _float(r.get("Min Temp (°C)"))
             precip, snow, rain = _float(r.get("Total Precip (mm)")) or 0.0, _float(r.get("Total Snow (cm)")) or 0.0, _float(r.get("Total Rain (mm)")) or 0.0
             t = totals[season_of(day)]
-            t["days"] += 1
             if tmax is not None and tmin is not None:
+                t["days"] += 1
                 t["freeze_thaw_days"] += tmax > 0 > tmin
                 t["days_below_minus10"] += tmin < -10
                 t["rain_on_frozen_days"] += rain > 2 and tmin < 0
@@ -72,7 +84,10 @@ def seasons(station_id, station_name, since_year, source_url):
         description="Per winter season (November to April): days with a freeze-thaw cycle (max above 0 °C and min below 0 °C), "
                     "very cold days, rain on frozen ground, total precipitation and snowfall, from the nearest Environment "
                     "and Climate Change Canada station. Freeze-thaw cycles are the dominant natural driver of potholes; "
-                    "compare them with complaint counts before attributing damage to construction quality.",
+                    "compare them with complaint counts before attributing damage to construction quality. "
+                    "'Days observed' counts days with a recorded maximum and minimum temperature; winters with fewer than 150 "
+                    "are incomplete." + (f" Days this station did not record, up to {earlier[2]}, come from the earlier station "
+                                         f"{earlier[1]}." if earlier else ""),
         fields=[("Season", "season"), ("Freeze-thaw days", "freeze_thaw_days"), ("Freeze-thaw vs average percent", "freeze_thaw_vs_average_pct"),
                 ("Days below -10 C", "days_below_minus10"), ("Rain on frozen days", "rain_on_frozen_days"),
                 ("Precipitation mm", "precip_mm"), ("Snow cm", "snow_cm"), ("Days observed", "days")])

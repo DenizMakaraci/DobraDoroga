@@ -518,3 +518,29 @@ def test_toronto_awards_are_read_from_the_nested_award_column():
     assert [(r["supplier"], r["amount"], r["award_date"]) for r in street] == [
         ("SECOND PAVER INC", 1317169.92, "2024-09-01"), ("SANSCON CONSTRUCTION LTD", 7224800.0, "2024-08-23"), ("UNIT PRICE LTD", 0.0, None)]
     assert [(r["vendor_name"], r["amount"], r["year"]) for r in supplier] == [("Second Paver Inc", 1317169.92, 2024)]
+
+
+def test_winters_before_a_station_opened_come_from_the_earlier_station_not_zero(monkeypatch):
+    from datetime import date, timedelta
+    from roadwatch.opendata import climate
+
+    def rows_for(station_id, year):
+        rows, day = [], date(year, 1, 1)
+        while day.year == year:
+            recorded = station_id == 5051 or day >= date(2002, 6, 4)   # the newer station has no temperatures before June 2002
+            thaw = station_id == 5051 and day.day % 2 == 0
+            rows.append({"Date/Time": day.isoformat(), "Max Temp (°C)": ("3.0" if thaw else "-2.0") if recorded else "",
+                         "Min Temp (°C)": "-5.0" if recorded else "", "Total Precip (mm)": "1.0", "Total Snow (cm)": "0", "Total Rain (mm)": "0"})
+            day += timedelta(days=1)
+        return rows
+    monkeypatch.setattr(climate, "daily_rows", rows_for)
+
+    alone = {r["season"]: r for r in climate.seasons(31688, "Toronto City", 2001, "https://climate.weather.gc.ca/x")["records"]}
+    assert alone["2001-02"]["days"] == 0 and alone["2001-02"]["freeze_thaw_vs_average_pct"] is None
+    assert alone["2002-03"]["days"] == 181 and alone["2002-03"]["freeze_thaw_days"] == 0
+
+    filled = climate.seasons(31688, "Toronto City", 2001, "https://climate.weather.gc.ca/x", earlier=(5051, "Toronto", 2003))
+    by_season = {r["season"]: r for r in filled["records"]}
+    assert by_season["2001-02"]["days"] == 181 and by_season["2001-02"]["freeze_thaw_days"] > 80
+    assert by_season["2002-03"]["freeze_thaw_days"] == 0 and by_season["2002-03"]["days"] == 181
+    assert "earlier station Toronto" in filled["pages"][0]["text"]
