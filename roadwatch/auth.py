@@ -5,8 +5,8 @@ out. When no key is configured the app is single-user and local: everyone is 'Lo
 Roles, lowest to highest: viewer (read, discuss) < investigator (+ edit the case, pull data, run investigations)
 < counsel (same powers, labelled as a lawyer) < admin (+ manage members).
 
-With ROADWATCH_GUEST=on a visitor can also enter without an account as a guest: read cases and search them,
-nothing else - no changes, no discussion, no export, nothing that spends the AI or embedding quota."""
+With ROADWATCH_GUEST=on a visitor can also enter without an account as a guest, with an investigator's powers
+except that a guest cannot post in the discussion (comments, replies, assessments) or touch accounts."""
 import hashlib
 import hmac
 import os

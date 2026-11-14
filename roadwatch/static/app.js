@@ -11,7 +11,7 @@ const isVendorCase = () => current?.anchor === "vendor";
 let current = null, projects = [], config = {}, tab = "report", busy = false, loadingProject = 0, evidenceMode = "import";
 let sessionInfo = {};
 let map = null, mapLayer = null, mapResults = [], cities = [], me = null, discussion = null, discussionTimer = null, discussAnchor = null;
-const ROLE_RANK = { viewer: 0, investigator: 1, counsel: 2, admin: 3 };
+const ROLE_RANK = { viewer: 0, guest: 1, investigator: 1, counsel: 2, admin: 3 };
 const canEdit = () => !me || ROLE_RANK[me.role] >= 1;
 const isGuest = () => me?.role === "guest";
 const STATUS_LABELS = { open: "Open", investigating: "Investigating", explained: "Explained (innocent)", escalated: "Escalated", dismissed: "Dismissed" };
@@ -95,7 +95,7 @@ async function selectProject(id) {
   const project = await api(`/projects/${id}`);
   if (requestId !== loadingProject) return;
   current = project; tab = "report"; discussion = null; discussAnchor = null; renderSidebar(); render();
-  if (!isGuest()) loadDiscussion(true);
+  loadDiscussion(true);
 }
 function empty(title, description, button = "") {
   return `<div class="panel empty"><div class="symbol">⌕</div><h2>${title}</h2><p>${description}</p>${button}</div>`;
@@ -113,18 +113,16 @@ function render() {
     ? [["report", "Investigation"], ["discussion", `Discussion${discussion?.comments?.length ? ` (${discussion.comments.length})` : ""}`], ["vendor", "Supplier & open data"], ["evidence", "Documents"], ["finances", "Spending"]]
     : [["report", "Investigation"], ["discussion", `Discussion${discussion?.comments?.length ? ` (${discussion.comments.length})` : ""}`], ["map", "Map & open data"], ["evidence", "Documents"], ["finances", "Spending"], ["observations", "Road condition"]];
   if (vendorCase && (tab === "map" || tab === "observations")) tab = "vendor";
-  if (isGuest()) { tabs.splice(1, 1); if (tab === "discussion") tab = "report"; }
   workspace.innerHTML = `
-    <div class="page-heading"><div><p class="eyebrow">${escapeHTML(vendorCase ? "SUPPLIER CASE" : current.contract_number ? `CONTRACT ${current.contract_number}` : "CASE")}</p><h1>${escapeHTML(current.name)}</h1><p class="subtitle">${vendorCase ? escapeHTML(current.contractor) + " · " + escapeHTML(vendorScope()) : escapeHTML(current.road) + (current.contractor ? " · " + escapeHTML(current.contractor) : "") + (current.completed_on ? " · completed " + escapeHTML(current.completed_on) : "")}</p></div><div class="actions"${isGuest() ? " hidden" : ""}><a class="link-button" href="/api/projects/${current.id}/export">↓ Export</a><button class="link-button danger" data-action="delete-project">Delete case</button></div></div>
-    ${isGuest() ? '<div class="banner"><strong>GUEST</strong> — you can read every case and search them. <button class="text-button" data-action="logout">Sign in</button> to discuss, add records or run an investigation.</div>' : ""}
+    <div class="page-heading"><div><p class="eyebrow">${escapeHTML(vendorCase ? "SUPPLIER CASE" : current.contract_number ? `CONTRACT ${current.contract_number}` : "CASE")}</p><h1>${escapeHTML(current.name)}</h1><p class="subtitle">${vendorCase ? escapeHTML(current.contractor) + " · " + escapeHTML(vendorScope()) : escapeHTML(current.road) + (current.contractor ? " · " + escapeHTML(current.contractor) : "") + (current.completed_on ? " · completed " + escapeHTML(current.completed_on) : "")}</p></div><div class="actions"><a class="link-button" href="/api/projects/${current.id}/export">↓ Export</a><button class="link-button danger" data-action="delete-project">Delete case</button></div></div>
+    ${isGuest() ? '<div class="banner"><strong>GUEST</strong> — you can work on every case: add records, pull open data and run investigations. <button class="text-button" data-action="logout">Sign in</button> to post in the discussion.</div>' : ""}
     ${current.demo ? '<div class="banner"><strong>SAMPLE CASE</strong> — every record, company and amount here is fictional, made up to show how a case works. Delete it whenever you like.</div>' : ""}
     <div class="stats"><div class="stat"><div class="label">Documents</div><div class="value">${current.evidence.length}</div><div class="foot">${current.evidence.filter(d => d.source_url).length} with source links</div></div><div class="stat"><div class="label">Financial entries</div><div class="value">${current.finances.length}</div><div class="foot">Sourced amounts · CAD</div></div>${vendorCase ? `<div class="stat"><div class="label">Open-data sets</div><div class="value">${pulledSets}</div><div class="foot">${pulledSets ? `${new Set((current.open_data || []).map(d => TIER_OF[d.key]).filter(Boolean)).size} tier(s) of government` : "Not pulled yet"}</div></div>` : `<div class="stat"><div class="label">Observations</div><div class="value">${current.observations.length}</div><div class="foot">Road condition reports</div></div>`}<div class="stat"><div class="label">Findings</div><div class="value">${latest ? latest.findings.length : "—"}</div><div class="foot">${stale ? "Report out of date" : latest ? "For human review" : "Not investigated yet"}</div></div></div>
     <div class="tabs" role="tablist">${tabs.map(([key, title]) => `<button role="tab" aria-selected="${key === tab}" class="tab ${key === tab ? "active" : ""}" data-tab="${key}">${title}</button>`).join("")}</div>
     ${busy ? `<div class="investigation-progress" role="status"><span class="pulse"></span>${busy === "opendata" ? "Pulling open data… the first pull downloads several datasets and can take a minute." : busy === "deep" ? "Deep investigation: planning hypotheses, testing each against the records, synthesising, then reviewing. This takes several minutes." : "Working… an AI investigation reads every page and can take a minute or two."}</div>` : ""}
     <div id="tab-content">${tab === "report" ? renderReport(latest, stale) : tab === "discussion" ? renderDiscussion(latest) : tab === "map" ? renderMap() : tab === "vendor" ? renderVendor() : tab === "evidence" ? renderEvidence() : tab === "finances" ? renderFinances() : renderObservations()}</div>`;
   if (busy) workspace.querySelectorAll("button").forEach(button => button.disabled = true);
-  if (!canEdit()) workspace.querySelectorAll("[data-action='checks'],[data-action='investigate'],[data-action='investigate-deep'],[data-action='evidence'],[data-action='finance'],[data-action='observation'],[data-action='pull-open-data'],[data-action='save-vendor'],[data-action='delete-project'],[data-delete],[data-remove-street],[data-limit]").forEach(el => { el.disabled = true; el.title = isGuest() ? "Guests can only read. Sign in to work on the case." : "Viewers can read and discuss; ask an admin for the investigator role."; });
-  if (isGuest()) workspace.querySelectorAll("[data-discuss],[data-action='new-project'],[data-action='demo']").forEach(el => { el.hidden = true; });
+  if (!canEdit()) workspace.querySelectorAll("[data-action='checks'],[data-action='investigate'],[data-action='investigate-deep'],[data-action='evidence'],[data-action='finance'],[data-action='observation'],[data-action='pull-open-data'],[data-action='save-vendor'],[data-action='delete-project'],[data-delete],[data-remove-street],[data-limit]").forEach(el => { el.disabled = true; el.title = "Viewers can read and discuss; ask an admin for the investigator role."; });
   if (tab === "discussion") { if (!discussion) loadDiscussion(); clearTimeout(discussionTimer); discussionTimer = setTimeout(function poll() { if (tab === "discussion" && current) loadDiscussion(true).then(() => { discussionTimer = setTimeout(poll, 20000); }); }, 20000); }
   if (tab === "map") { mountMap(); $("#condition-toggle")?.addEventListener("change", e => toggleCondition(e.target.checked).catch(err => notify(err.message, true))); } else map = null;
 }
@@ -494,7 +492,7 @@ function localCitation(citation) {
 function commentCard(c, depth = 0) {
   return `<article class="comment ${depth ? "reply" : ""}" id="comment-${c.id}"><div class="comment-head"><strong>${escapeHTML(c.author_name)}</strong><span class="badge">${escapeHTML(c.author_role)}</span>${c.opinion ? '<span class="badge opinion" title="Conclusory language without a citation">Opinion</span>' : ""}<small class="help">${new Date(c.created_at).toLocaleString()}${c.edited_at ? " · edited" : ""}${c.case_id && c.case_id !== current.id ? ` · posted in “${escapeHTML(c.case_name || "another case")}”` : ""}</small></div>
     <p>${escapeHTML(c.body)}</p><div class="citations">${(c.citations || []).map((ct, i) => citationButton(localCitation(ct), current.evidence, i)).join("")}</div>
-    <div class="comment-actions"><button class="text-button" data-reply="${c.id}">Reply</button>${commentActions(c).replace('<div class="comment-actions">', "").replace("</div>", "")}</div></article>`;
+    <div class="comment-actions"${isGuest() ? " hidden" : ""}><button class="text-button" data-reply="${c.id}">Reply</button>${commentActions(c).replace('<div class="comment-actions">', "").replace("</div>", "")}</div></article>`;
 }
 function renderDiscussion(latest) {
   if (!discussion) return '<div class="panel"><p class="help">Loading discussion…</p></div>';
@@ -510,7 +508,7 @@ function renderDiscussion(latest) {
   const threads = Object.entries(grouped).map(([key, list]) => `<section class="thread"><h4>${escapeHTML(list[0].anchor_label || (list[0].anchor_type === "case" ? "Whole case" : list[0].anchor_type))}</h4>${list.map(c => commentCard(c) + (byParent[c.id] || []).map(r => commentCard(r, 1)).join("")).join("")}</section>`).join("");
   return `<div class="section-header"><div><h2>Discussion</h2><p class="help">${escapeHTML(discussion.notice)}</p>${discussion.shared_streets?.length ? `<p class="help"><strong>One discussion for ${escapeHTML(discussion.shared_streets.join(", "))}.</strong> Every case on exactly ${discussion.shared_streets.length === 1 ? "this street" : "these streets"} shows and adds to it; adding or removing a street moves the case to that set's discussion. Finding statuses and owners stay with each case.</p>` : ""}</div><div class="help">${members.length} member${members.length === 1 ? "" : "s"}${me ? ` · you: ${escapeHTML(me.name)} (${escapeHTML(me.role)})` : ""}</div></div>
     ${renderAssessments()}${board}
-    <div class="panel composer"><p class="eyebrow" id="composer-title">${discussAnchor?.replyTo ? "REPLY" : "NEW POST"}</p>
+    ${isGuest() ? '<div class="panel"><p class="help">Guests can read the discussion and set finding statuses, but not post. <button class="text-button" data-action="logout">Sign in</button> to write a comment or an assessment.</p></div>' : `<div class="panel composer"><p class="eyebrow" id="composer-title">${discussAnchor?.replyTo ? "REPLY" : "NEW POST"}</p>
       <div class="form-grid"><label>Type<select id="post-kind"><option value="comment">Comment / working note</option><option value="assessment">Assessment (structured conclusion)</option></select></label>
       <label>About<select id="post-anchor">${anchors.map(([t, id, label]) => `<option value="${t}|${escapeHTML(id)}" ${t === selected.type && id === selected.id ? "selected" : ""}>${escapeHTML(label.slice(0, 90))}</option>`).join("")}</select></label></div>
       <div id="assessment-fields" hidden><label>Summary of what the evidence supports<textarea id="post-summary" rows="3" maxlength="4000" placeholder="e.g. The award to X on 2024-08-16 exceeds the City's estimate by 26% and the same firm won 3 of 4 tenders on this corridor; the records on file do not show the bid evaluation."></textarea></label>
@@ -518,7 +516,7 @@ function renderDiscussion(latest) {
         <div class="form-grid"><label>Recommended action<input id="post-action" maxlength="2000" placeholder="e.g. FOI request for bid tabulation; refer to Auditor General"></label><label>Status<select id="post-status"><option value="draft">Draft</option><option value="reviewed">Reviewed</option></select></label></div></div>
       <label id="body-label">Comment<textarea id="post-body" rows="4" maxlength="6000" placeholder="What did you check, what did you find, what should someone verify next? Cite the page."></textarea></label>
       <details class="help-details"><summary>Add a citation (optional, verified against the document)</summary><div class="form-grid"><label>Document<select id="post-cite-doc"><option value="">—</option>${current.evidence.map(d => `<option value="${d.id}">${escapeHTML(d.title.slice(0, 80))}</option>`).join("")}</select></label><label>Page<input id="post-cite-page" type="number" min="1" value="1"></label></div><label>Exact quotation<textarea id="post-cite-quote" rows="2" maxlength="2000" placeholder="Copy the passage exactly as it appears on that page."></textarea></label></details>
-      <div class="actions"><button class="primary" data-action="post-comment">Post →</button>${discussAnchor?.replyTo ? '<button class="secondary" data-action="cancel-reply">Cancel reply</button>' : ""}</div></div>
+      <div class="actions"><button class="primary" data-action="post-comment">Post →</button>${discussAnchor?.replyTo ? '<button class="secondary" data-action="cancel-reply">Cancel reply</button>' : ""}</div></div>`}
     ${threads || '<div class="panel empty"><h2>No discussion yet</h2><p>Start with what you checked and what someone should verify next.</p></div>'}`;
 }
 // Someone is part-way through a post: a background refresh must not redraw the form and lose it.
@@ -877,9 +875,8 @@ async function boot() {
   if (projects.length) await selectProject(projects[0].id); else render();
 }
 function showUser() {
-  $("#whoami").textContent = isGuest() ? "Browsing as a guest · read only" : me ? `Signed in as ${me.name} · ${me.role}` : "";
+  $("#whoami").textContent = isGuest() ? "Working as a guest" : me ? `Signed in as ${me.name} · ${me.role}` : "";
   $("#logout-button").textContent = isGuest() ? "Sign in" : "Sign out";
-  document.querySelectorAll(".sidebar .new-case, .sidebar .demo-button").forEach(el => { el.hidden = isGuest(); });
   $("#team-button").hidden = !(me && me.role === "admin");
   $("#account-button").hidden = !(me && !["admin", "local"].includes(me.id));
 }

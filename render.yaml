@@ -25,7 +25,7 @@ services:
       - key: ROADWATCH_SIGNUP
         value: invite        # or open
       - key: ROADWATCH_GUEST
-        value: "on"          # anyone with the address can read every case without an account; "off" to require sign-in
+        value: "on"          # anyone with the address can work on every case without an account (no discussion posts); "off" to require sign-in
       - key: ROADWATCH_MODEL
         value: gemini-3.6-flash
       - key: ROADWATCH_BASE_URL

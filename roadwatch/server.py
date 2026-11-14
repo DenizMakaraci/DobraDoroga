@@ -29,7 +29,7 @@ load_dotenv(ROOT.parent / ".env")  # Never load the unrelated parent project's c
 app = FastAPI(title="Roadwatch", version="0.2.0")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
-GUEST_READS = re.compile(r"/api/(config|me|projects|projects/[^/]+|search|cities|provinces|condition)")
+GUEST_CLOSED = re.compile(r"/api/(members(/.*)?|me(/.*)?|projects/[^/]+/comments(/.*)?)")
 PUBLIC_PATHS = {"/api/login", "/api/guest", "/api/session", "/healthz", "/api/invite/accept", "/api/password/forgot", "/api/signup"}
 
 
@@ -39,6 +39,11 @@ def meaning_search():
         return None
     from . import semantic
     return semantic if semantic.available() else None
+
+
+def guest_notice():
+    """Members are told their words stay in the workspace; say so when guest access makes that untrue."""
+    return " Guest access is on: anyone who has this address can read cases and this discussion without an account." if auth.guest_open() else ""
 
 
 def daily_ai_limit():
@@ -63,8 +68,8 @@ async def request_boundary(request: Request, call_next):
     if path.startswith("/api/") and path not in PUBLIC_PATHS and not path.startswith(("/api/invite/", "/api/verify/")) and auth.enabled():
         if not request.state.user:
             return JSONResponse({"detail": "Sign in required.", "auth": True}, status_code=401)
-        if request.state.user["role"] == "guest" and not (path == "/api/logout" or (request.method == "GET" and GUEST_READS.fullmatch(path))):
-            return JSONResponse({"detail": "Guests can read cases but not change, discuss or export them. Sign in to do more."}, status_code=403)
+        if request.state.user["role"] == "guest" and GUEST_CLOSED.fullmatch(path) and not (request.method == "GET" and path == "/api/me"):
+            return JSONResponse({"detail": "Guests can work on cases but cannot post in the discussion or manage accounts. Sign in to do that."}, status_code=403)
         if request.method in {"POST", "PUT", "DELETE", "PATCH"} and request.state.user["role"] == "viewer" \
                 and not (path.endswith("/comments") or "/comments/" in path or path.endswith("/status") or path == "/api/logout"):
             return JSONResponse({"detail": "Viewers can read and discuss but not change the case. Ask an admin for the investigator role."}, status_code=403)
@@ -131,7 +136,7 @@ def session(request: Request):
     user = request.state.user
     return {"auth_required": auth.enabled(), "signed_in": user is not None, "user": user,
             "signup_open": auth.enabled() and auth.signup_open(), "signup_role": auth.signup_role(),
-            "email_enabled": auth.smtp_configured(), "rules": WORKSPACE_RULES,
+            "email_enabled": auth.smtp_configured(), "rules": WORKSPACE_RULES + guest_notice(),
             "accounts": auth.enabled() and user is None and any(m["has_password"] for m in store.members()),
             "guest_open": auth.guest_open()}
 
@@ -308,9 +313,9 @@ def logout():
 
 
 @app.get("/api/config")
-def config(request: Request):
+def config():
     limit = daily_ai_limit()
-    meaning = None if request.state.user["role"] == "guest" else meaning_search()
+    meaning = meaning_search()
     if meaning:
         meaning.start()
     return {**ai.configuration(), "daily_ai_limit": limit, "ai_runs_today": store.ai_runs_today(),
@@ -324,13 +329,11 @@ def projects():
 
 
 @app.get("/api/search")
-def search_cases(request: Request, q: str, mode: str = "words"):
+def search_cases(q: str, mode: str = "words"):
     """Evidence pages in any case that contain every word of the query, or (mode=meaning) the pages closest to it in meaning."""
     if not 2 <= len(q.strip()) <= 200:
         raise HTTPException(422, "Enter at least two characters to search.")
     if mode == "meaning":
-        if request.state.user["role"] == "guest":
-            raise HTTPException(403, "Search by meaning needs an account. Search by exact words is open to guests.")
         meaning = meaning_search()
         if not meaning:
             raise HTTPException(422, "Search by meaning needs the MongoDB store and an embedding model (ROADWATCH_EMBED_MODEL).")
@@ -704,8 +707,11 @@ def discussion(request: Request, project_id: str):
     members = store.members(include_inactive=True)
     statuses = store.finding_statuses(project_id)
     shared = store.discussion_id(project) != project_id
+    active = [m for m in members if m["active"]]
+    if request.state.user["role"] == "guest":  # a guest may assign an owner by name but does not get the team's email addresses
+        active = [{"id": m["id"], "name": m["name"], "role": m["role"], "active": 1} for m in active]
     return {"comments": store.discussion(project), "statuses": [comment_view(s, members) for s in statuses.values()],
-            "members": [m for m in members if m["active"]], "notice": DISCUSSION_NOTICE, "me": request.state.user,
+            "members": active, "notice": DISCUSSION_NOTICE + guest_notice(), "me": request.state.user,
             "shared_streets": [location["road"] for location in project["locations"]] if shared else []}
 
 

@@ -286,46 +286,52 @@ def test_daily_ai_cap_and_project_delete(client, case, monkeypatch):
     assert client.delete(base).status_code == 404
 
 
-def test_guest_mode_is_read_only_and_off_by_default(tmp_path, monkeypatch):
+def test_guests_can_work_on_cases_but_not_post_in_the_discussion(tmp_path, monkeypatch):
     monkeypatch.setenv("ROADWATCH_DB", str(tmp_path / "guest.sqlite3"))
     monkeypatch.setenv("ROADWATCH_ACCESS_KEY", "correct-horse")
     monkeypatch.delenv("ROADWATCH_GUEST", raising=False)
-    from roadwatch import auth
+    from roadwatch import auth, store
     auth._attempts.clear()  # the lockout test above leaves this address throttled
     with TestClient(app) as admin, TestClient(app) as guest:
         assert admin.post("/api/login", json={"access_key": "correct-horse"}).status_code == 200
         case = admin.post("/api/demo").json()
-        admin.post(f"/api/projects/{case['id']}/investigate", json={"use_ai": False})
-        admin.post(f"/api/projects/{case['id']}/comments", json={"body": "Internal working note."})
+        note = admin.post(f"/api/projects/{case['id']}/comments", json={"body": "Team working note."}).json()
+        store.add_member("Ina", "investigator", "hash-ina", email="ina@example.org", password_hash="pw")
 
         assert guest.get("/api/session").json()["guest_open"] is False
-        assert guest.post("/api/guest").status_code == 403 and guest.get("/api/projects").status_code == 401
+        assert guest.post("/api/guest").status_code == 403 and guest.get("/api/projects").status_code == 401   # off by default
 
         monkeypatch.setenv("ROADWATCH_GUEST", "on")
         assert guest.get("/api/session").json()["guest_open"] is True
-        entered = guest.post("/api/guest")
-        assert entered.status_code == 200 and entered.json()["user"]["role"] == "guest"
-        assert guest.get("/api/session").json()["user"]["role"] == "guest"
+        assert guest.post("/api/guest").json()["user"] == {"id": "guest", "name": "Guest", "role": "guest"}
+        assert guest.get("/api/me").json()["role"] == "guest"
 
-        # reading is open
-        assert [p["id"] for p in guest.get("/api/projects").json()] == [case["id"]]
-        seen = guest.get(f"/api/projects/{case['id']}").json()
-        assert seen["evidence"] and seen["reports"][-1]["findings"]
-        assert guest.get("/api/search", params={"q": "asphalt"}).json()["mode"] == "words"
-        assert guest.get("/api/config").json()["semantic_search"] is False
-        assert guest.get("/api/cities").status_code == 200 and guest.get("/api/me").json()["role"] == "guest"
-
-        # everything else is closed
+        # a guest works on cases like an investigator
         id_ = case["id"]
-        closed = [guest.post("/api/projects", json={"name": "x", "road": "y"}), guest.post("/api/demo"), guest.delete(f"/api/projects/{id_}"),
-                  guest.post(f"/api/projects/{id_}/investigate", json={"use_ai": False}), guest.post(f"/api/projects/{id_}/open-data", json={}),
-                  guest.post(f"/api/projects/{id_}/evidence", json={"title": "t", "kind": "other", "text": "x"}),
-                  guest.post(f"/api/projects/{id_}/comments", json={"body": "hello"}), guest.get(f"/api/projects/{id_}/discussion"),
-                  guest.get(f"/api/projects/{id_}/export"), guest.get("/api/members"), guest.get("/api/geocode", params={"q": "King Street"}),
-                  guest.get("/api/search", params={"q": "asphalt", "mode": "meaning"}), guest.put("/api/me", json={"name": "Not a guest"})]
-        assert [r.status_code for r in closed] == [403] * len(closed)
-        assert "Guests can read" in closed[0].json()["detail"]
-        assert "Internal working note." not in guest.get(f"/api/projects/{id_}").text
+        own = guest.post("/api/projects", json={"name": "Guest case", "road": "King Street"})
+        assert own.status_code == 201 and len(guest.get("/api/projects").json()) == 2
+        assert guest.post(f"/api/projects/{id_}/evidence", json={"title": "Note", "kind": "other", "text": "Paving invoice 14"}).status_code == 201
+        report = guest.post(f"/api/projects/{id_}/investigate", json={"use_ai": False}).json()["reports"][-1]
+        assert report["findings"] and guest.get(f"/api/projects/{id_}/export").status_code == 200
+        assert guest.get("/api/search", params={"q": "paving invoice"}).json()["hits"]
+        status = guest.put(f"/api/projects/{id_}/findings/{report['findings'][0]['key']}/status", json={"status": "investigating", "title": "t"})
+        assert status.status_code == 200 and status.json()["updated_by"] == "Guest"
+        assert guest.delete(f"/api/projects/{own.json()['id']}").status_code == 200
+
+        # the discussion is readable, without the team's email addresses, but a guest cannot write in it
+        thread = guest.get(f"/api/projects/{id_}/discussion").json()
+        assert [c["body"] for c in thread["comments"]] == ["Team working note."]
+        assert "Guest access is on" in admin.get(f"/api/projects/{id_}/discussion").json()["notice"]
+        assert thread["members"] == [{"id": thread["members"][0]["id"], "name": "Ina", "role": "investigator", "active": 1}]
+        closed = [guest.post(f"/api/projects/{id_}/comments", json={"body": "hello"}),
+                  guest.post(f"/api/projects/{id_}/comments", json={"parent_id": note["id"], "body": "a reply"}),
+                  guest.post(f"/api/projects/{id_}/comments", json={"kind": "assessment", "assessment": {"summary": "s", "risk": "low"}}),
+                  guest.put(f"/api/projects/{id_}/comments/{note['id']}", json={"body": "edited"}),
+                  guest.delete(f"/api/projects/{id_}/comments/{note['id']}"), guest.delete(f"/api/projects/{id_}/comments/{note['id']}"),
+                  guest.get("/api/members"), guest.post("/api/members", json={"name": "x", "email": "x@example.org"}),
+                  guest.put("/api/me", json={"name": "Not a guest"}), guest.put("/api/me/password", json={"current_password": "a", "new_password": "b" * 12})]
+        assert [r.status_code for r in closed] == [403] * len(closed) and "cannot post in the discussion" in closed[0].json()["detail"]
+        assert [c["body"] for c in admin.get(f"/api/projects/{id_}/discussion").json()["comments"]] == ["Team working note."]
 
         # leaving, and switching guest mode off, both end the guest session
         again = TestClient(app)
