@@ -123,6 +123,19 @@ def _upgrade(project):
 
 
 @_backend
+def search_evidence(query, limit=40):
+    """Pages of evidence, in any case, that contain every word of `query`."""
+    from . import search
+    wanted, hits = search.words(query), []
+    for project in list_projects() if wanted else []:
+        for document in project["evidence"]:
+            hits += search.evidence_hits(project["id"], project["name"], document, wanted, limit - len(hits))
+            if len(hits) >= limit:
+                return hits
+    return hits
+
+
+@_backend
 def get_project(project_id):
     with database() as connection:
         row = connection.execute("SELECT body FROM projects WHERE id = ?", (project_id,)).fetchone()

@@ -132,6 +132,17 @@ With MongoDB the service no longer needs a persistent disk for cases and can run
 instance; the open-data cache (`ROADWATCH_CACHE`) is still local files and is re-downloaded when lost.
 In Atlas, allow the server's IP address under **Network Access** or connections will time out.
 
+The **Search all cases** box in the sidebar finds every evidence page, in any case, that contains all the words
+you type (whole words, ignoring case and accents). It works on both stores; on MongoDB a text index over the
+evidence finds the documents, on SQLite every case is scanned.
+
+With MongoDB Atlas and `ROADWATCH_EMBED_MODEL` set, the search dialog also offers **By meaning**: it returns the
+pages closest in meaning to what you typed, in any language, using Atlas Vector Search. Each evidence page is cut
+into pieces of up to 1,500 characters and embedded once in the background (the text is sent to the embedding
+provider); new evidence is picked up the next time the app is opened or searched. It always returns the nearest
+pages, so a low similarity means "nothing close", not a match. On a self-hosted MongoDB without Vector Search the
+same results come from comparing every stored vector, which is fine for a few thousand pages.
+
 ### Environment variables
 
 | Variable | Purpose |
@@ -143,6 +154,7 @@ In Atlas, allow the server's IP address under **Network Access** or connections 
 | `ROADWATCH_API_KEY`, `ROADWATCH_MODEL`, `ROADWATCH_BASE_URL` | Any OpenAI-compatible chat-completions provider with tool calling. Tested: Gemini (`gemini-3.6-flash`); configured default `gemini-3.8-flash`. |
 | `ROADWATCH_DAILY_AI_LIMIT` | AI investigations per UTC day (default 40). Financial checks are unlimited. |
 | `ROADWATCH_DB` | SQLite path. Point at the persistent disk. |
+| `ROADWATCH_EMBED_MODEL`, `_API_KEY`, `_BASE_URL`, `_DIMENSIONS` | Optional, with MongoDB: turns on search by meaning. Key and URL default to `ROADWATCH_API_KEY` / `ROADWATCH_BASE_URL`; 768 dimensions by default. |
 | `ROADWATCH_MONGODB_URI`, `ROADWATCH_MONGODB_DB` | Optional. Store cases in MongoDB instead of SQLite (needs the `mongo` extra). The database name defaults to the one in the URI, else `roadwatch`. |
 | `ROADWATCH_CACHE` | Directory for downloaded open-data files (default: next to the database). Safe to delete. |
 | `ROADWATCH_ALLOWED_ORIGINS` | Only for dev proxies that rewrite `Host`. |

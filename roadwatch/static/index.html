@@ -14,6 +14,7 @@
     <a class="brand" href="/"><span class="brand-icon">R</span>roadwatch</a>
     <p class="eyebrow sidebar-label">CASES</p>
     <button class="new-case" data-action="new-project">＋ New case</button>
+    <form id="case-search" role="search"><input name="q" type="search" placeholder="Search all cases…" aria-label="Search the evidence of all cases" minlength="2" maxlength="200" autocomplete="off"></form>
     <nav id="project-list" aria-label="Cases"></nav>
     <button class="demo-button" data-action="demo">Add a sample case</button>
     <div class="sidebar-footer"><span class="status-dot"></span> <span id="model-status">Connecting…</span><p id="whoami"></p><button class="text-button" data-action="setup">About the AI &amp; privacy</button><button class="text-button" data-action="account" id="account-button" hidden>Account</button><button class="text-button" data-action="team" id="team-button" hidden>Team &amp; access</button><button class="text-button" data-action="logout" id="logout-button" hidden>Sign out</button></div>
@@ -84,7 +85,7 @@
           <div>
             <label>Company name<input name="vendor_name" maxlength="160" placeholder="e.g. Northbridge Advisory Inc." autocomplete="off"></label>
             <label>Other names it trades under (optional, comma-separated)<input name="vendor_aliases" maxlength="600" placeholder="e.g. 1234567 Canada Inc, Northbridge Group"></label>
-            <div class="form-grid"><label>Province to add<select name="vendor_province" id="new-case-province"><option value="">Federal records only</option></select></label><label>Records since<select name="vendor_since"><option>2010</option><option selected>2015</option><option>2018</option><option>2020</option><option>2022</option></select></label></div>
+            <div class="form-grid"><label>Province to add<select name="vendor_province" id="new-case-province"><option value="">Federal records only</option></select></label><label>Records since<select name="vendor_since"><option>2000</option><option>2005</option><option>2010</option><option selected>2015</option><option>2018</option><option>2020</option><option>2022</option></select></label></div>
             <label>Case name<input name="vendor_case_name" maxlength="160" placeholder="Leave blank to name it after the company"></label>
           </div>
           <div>
@@ -179,11 +180,13 @@
     <div id="new-key" class="callout selected" hidden></div>
   </dialog>
 
+  <dialog id="search-dialog" class="wide-dialog"><div class="dialog-heading"><h2 id="search-title">Search</h2><button class="close" data-close aria-label="Close">×</button></div><div id="search-results"></div></dialog>
   <dialog id="source-dialog" class="wide-dialog"><div class="dialog-heading"><h2 id="source-title">Evidence</h2><button class="close" data-close aria-label="Close">×</button></div><div id="source-content"></div></dialog>
   <dialog id="setup-dialog">
     <div class="dialog-heading"><div><p class="eyebrow">HOW ROADWATCH WORKS</p><h2>The AI &amp; your data</h2></div><button class="close" data-close aria-label="Close">×</button></div>
     <p><strong>Financial checks</strong> run on this server with plain arithmetic: they compare award, amendment and payment entries of the same scope and tax basis and flag payments over authorization or repeated references.</p>
     <p><strong>AI investigation</strong> sends the case's documents, entries and observations to the configured model provider (<code id="setup-provider">—</code>). The model reads pages, follows leads and returns findings that must quote the source; quotes that don't exist are discarded automatically.</p>
+    <p id="setup-meaning" hidden><strong>Search by meaning</strong> sends the text of every evidence page, once, and each search you type to the embedding model (<code id="setup-embed">—</code>) so pages can be found by what they say rather than by exact words.</p>
     <div class="callout">Findings are leads for human review. Roadwatch never declares corruption, fraud or misconduct — it points to discrepancies, states innocent explanations, and lists the records needed to resolve them.</div>
     <p class="help" id="setup-usage"></p>
     <p class="help">Don't upload confidential or whistleblower material unless the server operator has confirmed the AI provider's data terms. Public procurement records are appropriate.</p>

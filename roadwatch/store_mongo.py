@@ -19,6 +19,7 @@ from pymongo import ASCENDING, MongoClient
 from pymongo.collation import Collation
 from pymongo.errors import DuplicateKeyError
 
+from . import search
 from .store import _upgrade, identifier, now
 
 SPLIT = ("evidence", "open_data", "reports")
@@ -44,6 +45,8 @@ def _db():
     db = _clients[uri][name]
     if (uri, name) not in _ready:
         db.parts.create_index([("project_id", ASCENDING)])
+        db.parts.create_index([("body.title", "text"), ("body.pages.text", "text")], name="evidence_text",
+                              default_language="none", language_override="_text_language")
         db.members.create_index([("key_hash", ASCENDING)], unique=True)
         db.members.create_index([("email", ASCENDING)], unique=True, partialFilterExpression={"email": {"$type": "string"}})
         db.comments.create_index([("project_id", ASCENDING), ("created_at", ASCENDING)])
@@ -132,6 +135,7 @@ def delete_project(project_id):
     db = _db()
     deleted = db.projects.delete_one({"_id": project_id}).deleted_count > 0
     db.parts.delete_many({"project_id": project_id})
+    db.chunks.delete_many({"project_id": project_id})
     return deleted
 
 
@@ -166,6 +170,30 @@ def project_summaries():
     """The fields the case list shows, read without loading evidence, open data or reports."""
     rows = _db().projects.find({}, {f"body.{field}": 1 for field in SUMMARY_FIELDS}).sort("created_at", -1)
     return [{field: row["body"].get(field) for field in SUMMARY_FIELDS} for row in rows]
+
+
+def search_evidence(query, limit=40):
+    """Pages of evidence, in any case, that contain every word of `query`. The text index finds the documents;
+    search.evidence_hits picks the pages, so results match the SQLite store's."""
+    wanted = search.words(query)
+    if not wanted:
+        return []
+    db = _db()
+    names, live = {}, set()
+    for row in db.projects.find({}, {"body.name": 1, "parts.evidence": 1}):
+        names[row["_id"]] = row["body"].get("name")
+        live.update(row["parts"]["evidence"])
+    found = db.parts.find({"kind": "evidence", "$text": {"$search": " ".join(f'"{word}"' for word in wanted)}},
+                          {"project_id": 1, "score": {"$meta": "textScore"}}).sort([("score", {"$meta": "textScore"})]).limit(200)
+    candidates = [(row["_id"], row["project_id"]) for row in found if row["_id"] in live]
+    bodies = _bodies(db, [part_id for part_id, _ in candidates])
+    hits = []
+    for part_id, project_id in candidates:
+        if part_id in bodies:
+            hits += search.evidence_hits(project_id, names[project_id], bodies[part_id], wanted, limit - len(hits))
+        if len(hits) >= limit:
+            break
+    return hits
 
 
 def get_project(project_id):
@@ -204,6 +232,7 @@ def mutate(project_id, callback):
         dropped = set(_part_ids(document)) - {i for ids in manifest.values() for i in ids} if committed else {p["_id"] for p in new}
         if dropped:
             db.parts.delete_many({"_id": {"$in": list(dropped)}})
+            db.chunks.delete_many({"part_id": {"$in": list(dropped)}})
         if committed:
             return project
     raise RuntimeError(f"Case {project_id} is being edited too heavily to save. Try again.")

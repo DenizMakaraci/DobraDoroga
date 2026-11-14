@@ -6,8 +6,9 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def case_store(monkeypatch):
-    """Tests never reach the MongoDB named in .env. With ROADWATCH_TEST_MONGODB_URI the whole suite runs on that
+    """Tests never reach the MongoDB or the embedding model named in .env. With ROADWATCH_TEST_MONGODB_URI the whole suite runs on that
     server instead of SQLite, each test in its own database that is dropped afterwards."""
+    monkeypatch.delenv("ROADWATCH_EMBED_MODEL", raising=False)
     uri = os.environ.get("ROADWATCH_TEST_MONGODB_URI")
     if not uri:
         monkeypatch.delenv("ROADWATCH_MONGODB_URI", raising=False)

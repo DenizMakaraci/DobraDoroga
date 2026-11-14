@@ -32,6 +32,14 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 PUBLIC_PATHS = {"/api/login", "/api/session", "/healthz", "/api/invite/accept", "/api/password/forgot", "/api/signup"}
 
 
+def meaning_search():
+    """The semantic module when search by meaning is configured (MongoDB store plus an embedding model), else None."""
+    if not (os.getenv("ROADWATCH_MONGODB_URI") and os.getenv("ROADWATCH_EMBED_MODEL")):
+        return None
+    from . import semantic
+    return semantic if semantic.available() else None
+
+
 def daily_ai_limit():
     return int(os.getenv("ROADWATCH_DAILY_AI_LIMIT", "40"))
 
@@ -288,13 +296,37 @@ def logout():
 @app.get("/api/config")
 def config():
     limit = daily_ai_limit()
+    meaning = meaning_search()
+    if meaning:
+        meaning.start()
     return {**ai.configuration(), "daily_ai_limit": limit, "ai_runs_today": store.ai_runs_today(),
-            "import_hosts": sorted(documents.ALLOWED_HOSTS)}
+            "import_hosts": sorted(documents.ALLOWED_HOSTS), "semantic_search": bool(meaning),
+            "embedding_model": meaning.settings()["model"] if meaning else ""}
 
 
 @app.get("/api/projects")
 def projects():
     return store.project_summaries()
+
+
+@app.get("/api/search")
+def search_cases(q: str, mode: str = "words"):
+    """Evidence pages in any case that contain every word of the query, or (mode=meaning) the pages closest to it in meaning."""
+    if not 2 <= len(q.strip()) <= 200:
+        raise HTTPException(422, "Enter at least two characters to search.")
+    if mode == "meaning":
+        meaning = meaning_search()
+        if not meaning:
+            raise HTTPException(422, "Search by meaning needs the MongoDB store and an embedding model (ROADWATCH_EMBED_MODEL).")
+        try:
+            hits = meaning.search(q.strip(), limit=15)
+        except Exception as error:
+            logging.getLogger("roadwatch").warning("search by meaning failed: %s", type(error).__name__)
+            raise HTTPException(502, "Search by meaning is unavailable right now. Search by exact words still works.")
+        meaning.start()
+        return {"query": q.strip(), "mode": "meaning", "hits": hits, "truncated": False, "indexing": meaning.status()["pending"]}
+    hits = store.search_evidence(q.strip(), limit=41)
+    return {"query": q.strip(), "mode": "words", "hits": hits[:40], "truncated": len(hits) > 40}
 
 
 @app.get("/api/provinces")

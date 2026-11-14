@@ -64,6 +64,7 @@ function showDialog(name) {
   if (name === "observation") dialog.querySelector("[name=observed_on]").value = new Date().toLocaleDateString("en-CA");
   if (name === "setup") {
     $("#setup-provider").textContent = config.enabled ? (config.providers || []).map(p => p.model).join(", ") : "not configured";
+    $("#setup-meaning").hidden = !config.semantic_search; $("#setup-embed").textContent = config.embedding_model || "";
     $("#setup-usage").textContent = config.enabled ? `AI investigations today: ${config.ai_runs_today} of ${config.daily_ai_limit} allowed.` : "";
   }
   dialog.showModal();
@@ -154,7 +155,7 @@ function renderVendor() {
       <label>Province to add<select id="vendor-province"><option value="">Federal records only</option>${provinces.map(p => `<option value="${escapeHTML(p.key)}" ${p.key === vendor.province ? "selected" : ""}>${escapeHTML(p.name)} (+ ${escapeHTML(p.city_name)})</option>`).join("")}</select></label>
       <button class="secondary" data-action="save-vendor">Save names →</button>
       <p class="help">Records are matched by canonical company name, exactly or as a name prefix ("GC Strategies" also finds "GC Strategies Inc."); add the numbered company or former names here so nothing is missed, and check the <em>Vendor name</em> on each cited row.</p>
-      <div class="form-grid"><label>Records since<select id="since-year">${[2010, 2015, 2018, 2020, 2022].map(y => `<option value="${y}" ${y === (pulled[0]?.since_year ?? 2015) ? "selected" : ""}>${y}</option>`).join("")}</select></label><div></div></div>
+      <div class="form-grid"><label>Records since<select id="since-year">${[2000, 2005, 2010, 2015, 2018, 2020, 2022].map(y => `<option value="${y}" ${y === (pulled[0]?.since_year ?? 2015) ? "selected" : ""}>${y}</option>`).join("")}</select></label><div></div></div>
       <button class="primary" data-action="pull-open-data">${pulled.length ? (stale ? "Pull open data for the new names →" : pending ? "Pull again (federal index was building) →" : "Refresh open data →") : "Pull open data for this supplier →"}</button>
       <p class="help">${escapeHTML(vendorScope())}: federal contracts over $10,000 with their amendments, sole-source reasons and bid counts; Registry of Lobbyists communications; the PSPC ineligibility list${vendor.province ? "; " + escapeHTML(provinces.find(p => p.key === vendor.province)?.tiers || "") : ""}.</p></div>`;
   return `<div class="section-header"><div><h2>Supplier &amp; open data</h2><p class="help">Follow one company across every government that publishes what it pays it.</p></div></div>
@@ -173,7 +174,7 @@ function renderMap() {
       <label class="check"><input type="checkbox" id="condition-toggle" ${current.show_condition !== false ? "checked" : ""}> Show road condition on the map</label>
       ${locations.length ? streetList(locations, true) : "<h3>Search or click the map</h3>"}
       <p class="help">${locations.length ? `Search or click the map to add another street in ${escapeHTML(city.name)}. Streets in one case must be in the same city; their open data is merged, and the investigation looks for the same suppliers, permit holders and timing across them.` : `Type a street or click the road on the map. You can add several streets to investigate them together. Open data is connected for ${escapeHTML(cities.map(c => c.name).join(" and "))}; each city's records are kept apart.`}</p>
-      ${locations.length ? `<div class="form-grid"><label>Records since<select id="since-year">${[2010, 2015, 2018, 2020, 2022].map(y => `<option value="${y}" ${y === (pulled[0]?.since_year ?? 2015) ? "selected" : ""}>${y}</option>`).join("")}</select></label><div></div></div>
+      ${locations.length ? `<div class="form-grid"><label>Records since<select id="since-year">${[2000, 2005, 2010, 2015, 2018, 2020, 2022].map(y => `<option value="${y}" ${y === (pulled[0]?.since_year ?? 2015) ? "selected" : ""}>${y}</option>`).join("")}</select></label><div></div></div>
       <button class="primary" data-action="pull-open-data">${pulled.length ? (stale ? "Pull open data for the new streets →" : "Refresh open data →") : `Pull open data for ${locations.length > 1 ? "these streets" : "this street"} →`}</button>
       <p class="help">Pulls ${escapeHTML(city.name)}'s contracts, permits, 311 requests${city.key === "toronto" ? ", road program, non-competitive contracts and lobbyist registry" : ""}, keeps the records that name ${locations.length > 1 ? "any of these streets" : "this street"}, and stores them as citable documents.</p>` : ""}</div>`;
   const datasets = datasetPanel(pulled, (pulled[0]?.streets || []).join(", "), stale ? "Streets were added since this pull. Pull again to include them." : "");
@@ -206,7 +207,7 @@ function pieChart(entries, total) {
 }
 function barChart(entries, format, label) {
   if (!entries.length) return "";
-  const max = Math.max(...entries.map(([, v]) => v)), w = 100 / entries.length, every = entries.length > 8 ? 2 : 1;
+  const max = Math.max(...entries.map(([, v]) => v)) || 1, w = 100 / entries.length, every = entries.length > 8 ? 2 : 1;
   const bars = entries.map(([k, v], i) => `<rect x="${(i * w + 0.8).toFixed(2)}" y="${(60 - 58 * v / max).toFixed(2)}" width="${(w - 1.6).toFixed(2)}" height="${Math.max(0.5, 58 * v / max).toFixed(2)}" fill="#116c5a"><title>${escapeHTML(k)}: ${format(v)}</title></rect>`).join("");
   const labels = entries.map(([k], i) => `<span>${i % every === 0 ? escapeHTML(String(k).slice(-4)) : ""}</span>`).join("");
   return `<div class="chart"><svg viewBox="0 0 100 60" class="bars" preserveAspectRatio="none" role="img" aria-label="${escapeHTML(label)}">${bars}</svg><div class="axis">${labels}</div></div>`;
@@ -564,6 +565,39 @@ function renderObservations() {
   const threadFor = o => (discussion?.comments || []).filter(c => c.anchor_type === "observation" && c.anchor_id === o.id && !c.parent_id);
   return `<div class="section-header"><div><h2>Road condition</h2><p class="help">What the road looks like now, with date and location. Each observation has its own discussion thread.</p></div><button class="primary" data-action="observation">＋ Add observation</button></div>` + (current.observations.length ? current.observations.map(o => `<article class="panel observation"><div class="section-header"><span class="badge">${escapeHTML(o.severity)}</span><span class="help">${escapeHTML(o.observed_on)}</span></div><p>${escapeHTML(o.description)}</p><div class="section-header"><a class="gps" href="https://www.openstreetmap.org/?mlat=${o.latitude}&mlon=${o.longitude}#map=18/${o.latitude}/${o.longitude}" target="_blank" rel="noopener noreferrer">${o.latitude}, ${o.longitude} ↗</a><div class="actions"><button class="link-button small" data-discuss="${o.id}" data-discuss-type="observation" data-discuss-label="${escapeHTML(observationLabel(o))}">Discuss${threadCount("observation", o.id)}</button><button class="delete-button" data-delete="observations" data-id="${o.id}">Remove</button></div></div>${threadFor(o).length ? `<div class="inline-thread">${threadFor(o).slice(-3).map(c => `<div class="inline-comment"><strong>${escapeHTML(c.author_name)}</strong> <span class="badge">${escapeHTML(c.author_role)}</span> <small class="help">${new Date(c.created_at).toLocaleDateString()}</small><p>${escapeHTML(c.body)}</p></div>`).join("")}${threadFor(o).length > 3 ? `<button class="text-button" data-discuss="${o.id}" data-discuss-type="observation" data-discuss-label="${escapeHTML(observationLabel(o))}">See all ${threadFor(o).length} comments</button>` : ""}</div>` : ""}</article>`).join("") : empty("No observations yet", "Add a dated description and location. Condition reports give the investigation something to compare the paperwork against."));
 }
+function markWords(snippet, query) {
+  const words = [...new Set(query.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().match(/[\p{L}\p{N}_]{2,}/gu) || [])];
+  return escapeHTML(snippet).replace(/[\p{L}\p{N}_]+/gu, word => words.includes(word.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()) ? `<mark>${word}</mark>` : word);
+}
+let lastSearch = "", searchMode = "words";
+async function searchCases(query, mode = searchMode) {
+  lastSearch = query; searchMode = config.semantic_search ? mode : "words";
+  const meaning = searchMode === "meaning";
+  $("#search-title").textContent = `“${query}”`;
+  const switcher = config.semantic_search ? `<div class="mode-tabs"><button class="mode-tab ${meaning ? "" : "active"}" data-search-mode="words">Exact words</button><button class="mode-tab ${meaning ? "active" : ""}" data-search-mode="meaning">By meaning</button></div>` : "";
+  $("#search-results").innerHTML = switcher + '<p class="help">Searching…</p>';
+  if (!$("#search-dialog").open) $("#search-dialog").showModal();
+  let result;
+  try { result = await api(`/search?q=${encodeURIComponent(query)}&mode=${searchMode}`); }
+  catch (error) { $("#search-results").innerHTML = switcher + `<p class="error-text">${escapeHTML(error.message)}</p>`; return; }
+  if (query !== lastSearch || result.mode !== searchMode) return;
+  const cases = Object.values(result.hits.reduce((groups, hit) => { (groups[hit.project_id] ||= []).push(hit); return groups; }, {}));
+  const indexing = result.indexing ? `<p class="callout stale">${result.indexing} document${result.indexing === 1 ? " is" : "s are"} still being prepared for search by meaning, so results may be incomplete. Search again in a minute.</p>` : "";
+  const intro = meaning
+    ? `<p class="help">The ${result.hits.length} page${result.hits.length === 1 ? "" : "s"} closest in meaning to your search, best first. This always returns the nearest pages, even when none is a good match, so read each one before relying on it.</p>`
+    : `<p class="help">${result.hits.length}${result.truncated ? "+" : ""} page${result.hits.length === 1 ? "" : "s"} in ${cases.length} case${cases.length === 1 ? "" : "s"} contain every word. Open a page to read it in its case.</p>`;
+  const nothing = meaning ? '<p class="help">Nothing is ready to search by meaning yet.</p>'
+    : '<p class="help">No page in any case contains every word. Search matches whole words in documents and pulled open-data records, ignoring case and accents.</p>';
+  $("#search-results").innerHTML = switcher + indexing + (result.hits.length
+    ? intro + cases.map(hits => `<section class="search-case"><p class="eyebrow">${escapeHTML(hits[0].project_name)}</p>${hits.map(hit => `<button class="search-hit" data-hit-project="${escapeHTML(hit.project_id)}" data-hit-source="${escapeHTML(hit.evidence_id)}" data-hit-page="${hit.page}"><strong>${escapeHTML(hit.title)} · p.${hit.page}${meaning ? ` <small>similarity ${Number(hit.score).toFixed(2)}</small>` : ""}</strong><span>${meaning ? escapeHTML(hit.snippet) : markWords(hit.snippet, result.query)}</span></button>`).join("")}</section>`).join("") +
+      (result.truncated ? '<p class="help">Only the first 40 pages are shown. Add a word to narrow the search.</p>' : "")
+    : nothing);
+}
+async function openHit(button) {
+  closeDialog($("#search-dialog"));
+  if (current?.id !== button.dataset.hitProject) await selectProject(button.dataset.hitProject);
+  if (current?.id === button.dataset.hitProject) openSource(button.dataset.hitSource, Number(button.dataset.hitPage));
+}
 function openSource(id, pageNumber, snapshot) {
   const sources = snapshot ? current.reports.at(-1).source_catalog : current.evidence;
   const doc = sources.find(d => d.id === id);
@@ -591,6 +625,8 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.caseMode) return setCaseMode(button.dataset.caseMode);
     if (busy) return;
     if (button.dataset.project) return await selectProject(button.dataset.project);
+    if (button.dataset.hitProject) return await openHit(button);
+    if (button.dataset.searchMode) return await searchCases(lastSearch, button.dataset.searchMode);
     if (button.dataset.tab) { tab = button.dataset.tab; render(); return; }
     if (button.dataset.source) return openSource(button.dataset.source, Number(button.dataset.page), !!button.dataset.reportSource);
     if (button.dataset.place !== undefined) {
@@ -727,6 +763,12 @@ async function handleInviteLink() {
     render(); $("#invite-dialog").showModal(); return true;
   } catch (err) { notify(err.message, true); history.replaceState(null, "", location.pathname); return false; }
 }
+$("#case-search").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const query = event.target.q.value.trim();
+  if (query.length < 2) return;
+  await searchCases(query);
+});
 $("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target, submit = form.querySelector("[type=submit]");

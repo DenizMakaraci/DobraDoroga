@@ -181,3 +181,8 @@ dialog::backdrop{background:rgba(15,42,48,.45);backdrop-filter:blur(2px)}
 table.tiers td.amount{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}table.tiers td:first-child{color:var(--muted)}
 #project-dialog [data-case-pane="vendor"] .callout{font-size:13px;line-height:1.55}
 #project-dialog>form>.primary{margin-top:18px}
+#case-search{margin:-8px 0 16px}#case-search input{margin:0;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.18);border-radius:10px;color:#eef7f5;padding:9px 12px}#case-search input::placeholder{color:#8da6aa}#case-search input:focus{border-color:#86c9ad;outline:2px solid rgba(134,201,173,.25)}
+.search-case{margin-top:20px}.search-hit{display:block;width:100%;text-align:left;background:white;border:1px solid var(--line);border-radius:7px;padding:11px 14px;margin-bottom:8px}.search-hit:hover{border-color:#8daf9f;background:var(--soft)}.search-hit strong{display:block;font-size:12px;margin-bottom:3px}.search-hit span{display:block;font-size:12px;color:var(--muted);overflow-wrap:anywhere}.search-hit mark{background:#fde9a8;color:inherit;border-radius:2px;padding:0 1px}
+@media(max-width:700px){#case-search{margin:0 0 10px}}
+.search-hit small{font-weight:400;color:var(--muted);margin-left:6px}#search-results .mode-tabs{max-width:320px}
+.section-header>div:first-child{flex:1 1 240px;min-width:0}.section-header .actions{justify-content:flex-end;align-items:center}.section-header .actions .primary,.section-header .actions .secondary{padding-block:10px;line-height:22px}
