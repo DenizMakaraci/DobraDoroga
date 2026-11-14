@@ -213,7 +213,8 @@ def forgot_password(request: Request, data: ForgotPassword):
             except Exception:
                 pass
         return {"ok": True, "message": "If that address belongs to an account, a reset link has been emailed."}
-    return {"ok": True, "message": "This server does not send email. Ask your administrator for a reset link."}
+    return {"ok": True, "message": "This server does not send email. Ask your administrator for a reset link. If you are the "
+                                   "administrator, choose \"Use an access key instead\" and sign in with the server's access key."}
 
 
 @app.get("/api/me")
