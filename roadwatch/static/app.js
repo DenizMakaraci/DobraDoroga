@@ -410,13 +410,14 @@ function renderNewCaseStreets() {
 function pickNewCaseStreet(place) {
   const form = $("#project-form");
   if (!place.city_key) { drawPlaces(newCasePlaces, place); return notify(unsupportedCity(place) + " You can still create the case and attach documents manually.", true); }
-  const select = $("#new-case-city");
-  if (place.city_key !== select.value) {
-    if (newCasePlaces.length) return notify(`That street is in ${cityOf(place.city_key).name}, but this case already has a street in ${cityOf(select.value).name}. A case covers one city.`, true);
-    select.value = place.city_key; localStorage.setItem("roadwatch.city", place.city_key); mountCondition(place.city_key);
-    notify(`City switched to ${cityOf(place.city_key).name} to match that street.`);
+  // The case's city is the city of its first street; the menu follows it, never the other way round.
+  const caseCity = newCasePlaces[0]?.city_key, select = $("#new-case-city");
+  if (caseCity && caseCity !== place.city_key) return notify(`That street is in ${cityOf(place.city_key).name}, but this case already has a street in ${cityOf(caseCity).name}. A case covers one city.`, true);
+  if (select.value !== place.city_key) {
+    const shown = select.value;
+    fillCityMenu(place.city_key); localStorage.setItem("roadwatch.city", place.city_key); mountCondition(place.city_key);
+    if (shown) notify(`City switched to ${cityOf(place.city_key).name} to match that street.`);
   }
-  if (newCasePlaces.length && newCasePlaces[0].city_key !== place.city_key) return notify("All streets in a case must be in the same city.", true);
   if (newCasePlaces.some(p => (p.road || "").toLowerCase() === (place.road || "").toLowerCase())) return notify(`${place.road} is already in the list.`, true);
   newCasePlaces.push(place);
   drawPlaces(newCasePlaces); renderNewCaseStreets();
@@ -424,12 +425,17 @@ function pickNewCaseStreet(place) {
   form.road.value = `${roads.join(" & ")}, ${place.city || ""}`.replace(/, $/, "");
   if (!form.name.value || /road works \d{4}$/.test(form.name.value)) form.name.value = `${roads.join(" & ")} road works ${new Date().getFullYear()}`;
 }
-function openNewCaseDialog() {
+function fillCityMenu(selected) {
+  $("#new-case-city").innerHTML = cities.map(c => `<option value="${escapeHTML(c.key)}" ${c.key === selected ? "selected" : ""}>${escapeHTML(c.name)}</option>`).join("");
+}
+async function openNewCaseDialog() {
+  // On a slow server the button can be pressed before the page has loaded the list of cities.
+  if (!cities.length) cities = await api("/cities");
   newCasePlaces = []; mapResults = [];
   renderNewCaseStreets();
   $("#new-case-results").innerHTML = "";
-  const select = $("#new-case-city"), chosen = cityOf(localStorage.getItem("roadwatch.city"));
-  select.innerHTML = cities.map(c => `<option value="${escapeHTML(c.key)}" ${c.key === chosen.key ? "selected" : ""}>${escapeHTML(c.name)}</option>`).join("");
+  const chosen = cityOf(localStorage.getItem("roadwatch.city"));
+  fillCityMenu(chosen.key);
   $("#new-case-province").innerHTML = '<option value="">Federal records only</option>' + provinces.map(p => `<option value="${escapeHTML(p.key)}">${escapeHTML(p.name)} (+ ${escapeHTML(p.city_name)})</option>`).join("");
   $("#project-dialog").showModal();
   setCaseMode(localStorage.getItem("roadwatch.caseMode") === "vendor" ? "vendor" : "street");
