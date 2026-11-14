@@ -320,3 +320,67 @@ def test_ml_anomalies_and_team_calibration(admin, monkeypatch):
     monkeypatch.setattr(ml, "training_set", lambda: data)
     result = ml.calibration([dict(finding)])
     assert result["available"] and result["labels"] == 16 and result["influential_patterns"][0]["pattern"] in ("single_bidder", "complaint_spike")
+
+
+def street(road, city="toronto"):
+    latitude, longitude = (45.50, -73.57) if city == "montreal" else (43.65, -79.38)
+    return {"road": road, "display_name": road, "city_key": city, "latitude": latitude, "longitude": longitude}
+
+
+def case_on(client, name, *roads, city="toronto"):
+    case = client.post("/api/projects", json={"name": name, "road": roads[0] if roads else name}).json()
+    for road in roads:
+        case = client.post(f"/api/projects/{case['id']}/locations", json=street(road, city)).json()
+    return case
+
+
+def bodies(client, case):
+    return [c["body"] for c in client.get(f"/api/projects/{case['id']}/discussion").json()["comments"]]
+
+
+def test_cases_on_the_same_set_of_streets_share_one_discussion(admin):
+    from roadwatch import ai, store
+    first = case_on(admin, "Ana's case", "University Avenue", "Richmond Street West")
+    second = case_on(admin, "Ben's case", "Richmond St W", "University Ave")          # other order, other spelling
+    one_street = case_on(admin, "Only University", "University Avenue")
+    superset = case_on(admin, "Three streets", "University Avenue", "Richmond Street West", "Queen Street West")
+    other_city = case_on(admin, "Montréal twin", "University Avenue", "Richmond Street West", city="montreal")
+    no_street = admin.post("/api/projects", json={"name": "No street yet", "road": "University Avenue"}).json()
+    supplier = admin.post("/api/projects", json={"name": "Supplier", "anchor": "vendor", "contractor": "Pavages ABC inc."}).json()
+    assert store.discussion_id(store.get_project(first["id"])) == store.discussion_id(store.get_project(second["id"]))
+    assert len({store.discussion_id(store.get_project(c["id"])) for c in (first, one_street, superset, other_city, no_street, supplier)}) == 6
+
+    evidence = admin.post(f"/api/projects/{first['id']}/evidence", json={"title": "Award report", "kind": "contract", "text": "Award date: 2024-08-16"}).json()["evidence"][-1]
+    member, ina = enrol(admin, "Ina Investigator", "investigator")
+    posted = ina.post(f"/api/projects/{first['id']}/comments", json={"body": "Checked the award date.", "citations": [
+        {"evidence_id": evidence["id"], "page": 1, "quote": "Award date: 2024-08-16"}]}).json()
+    assert posted["case_id"] == first["id"] and posted["case_name"] == "Ana's case" and posted["citations"][0]["title"] == "Award report"
+    admin.post(f"/api/projects/{second['id']}/comments", json={"parent_id": posted["id"], "body": "Same date in my copy."})
+
+    shared = admin.get(f"/api/projects/{second['id']}/discussion").json()
+    assert [c["body"] for c in shared["comments"]] == ["Checked the award date.", "Same date in my copy."]
+    assert shared["shared_streets"] == ["Richmond St W", "University Ave"] and bodies(admin, first) == bodies(admin, second)
+    for separate in (one_street, superset, other_city, no_street, supplier):
+        assert bodies(admin, separate) == []
+    assert admin.get(f"/api/projects/{no_street['id']}/discussion").json()["shared_streets"] == []
+    assert [n["text"] for n in ai.team_notes(store.get_project(second["id"]))["comments"]] == ["Checked the award date.", "Same date in my copy."]
+
+    # the author edits and deletes from either case; someone else cannot
+    assert admin.put(f"/api/projects/{second['id']}/comments/{posted['id']}", json={"body": "x"}).status_code == 200  # admin may
+    member2, vic = enrol(admin, "Vic Viewer", "viewer")
+    assert vic.put(f"/api/projects/{second['id']}/comments/{posted['id']}", json={"body": "y"}).status_code == 403
+    assert ina.put(f"/api/projects/{second['id']}/comments/{posted['id']}", json={"body": "Checked the award date twice."}).status_code == 200
+    assert admin.put(f"/api/projects/{one_street['id']}/comments/{posted['id']}", json={"body": "z"}).status_code == 404
+    assert bodies(admin, first)[0] == "Checked the award date twice."
+
+    # the discussion belongs to the set of streets: changing the set moves the case to that set's discussion
+    grown = admin.post(f"/api/projects/{one_street['id']}/locations", json=street("Richmond Street West")).json()
+    assert bodies(admin, grown) == bodies(admin, first) and len(bodies(admin, grown)) == 2
+    admin.delete(f"/api/projects/{second['id']}/locations/0")
+    assert bodies(admin, second) == []
+    assert ina.delete(f"/api/projects/{first['id']}/comments/{posted['id']}").status_code == 200 and len(bodies(admin, grown)) == 1
+
+    # comments posted on a case before discussions were shared still show on that case
+    store.add_comment(first["id"], {"kind": "comment", "body": "Older note", "author_id": "admin", "author_name": "Admin", "author_role": "admin"})
+    assert "Older note" in bodies(admin, first) and "Older note" not in bodies(admin, grown)
+    assert "Older note" in [c["body"] for c in admin.get(f"/api/projects/{first['id']}/export").json()["discussion"]]

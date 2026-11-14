@@ -684,11 +684,13 @@ def comment_view(comment, members):
 
 @app.get("/api/projects/{project_id}/discussion")
 def discussion(request: Request, project_id: str):
-    project_or_404(project_id)
+    project = project_or_404(project_id)
     members = store.members(include_inactive=True)
     statuses = store.finding_statuses(project_id)
-    return {"comments": store.comments(project_id), "statuses": [comment_view(s, members) for s in statuses.values()],
-            "members": [m for m in members if m["active"]], "notice": DISCUSSION_NOTICE, "me": request.state.user}
+    shared = store.discussion_id(project) != project_id
+    return {"comments": store.discussion(project), "statuses": [comment_view(s, members) for s in statuses.values()],
+            "members": [m for m in members if m["active"]], "notice": DISCUSSION_NOTICE, "me": request.state.user,
+            "shared_streets": [location["road"] for location in project["locations"]] if shared else []}
 
 
 @app.post("/api/projects/{project_id}/comments", status_code=201)
@@ -703,10 +705,13 @@ def add_comment(request: Request, project_id: str, data: CommentInput):
     bad = [c for c in citations if not citation_valid(c, project)]
     if bad:
         raise HTTPException(422, "A citation's quotation does not appear on that page of that document.")
+    titles = {document["id"]: document["title"] for document in project["evidence"]}
+    citations = [{**c, "title": titles.get(c["evidence_id"], "")} for c in citations]
     if data.parent_id and not store.get_comment(data.parent_id):
         raise HTTPException(404, "The comment you are replying to no longer exists.")
     text = data.body + " " + (data.assessment.summary if data.assessment else "")
-    comment = store.add_comment(project_id, {
+    comment = store.add_comment(store.discussion_id(project), {
+        "case_id": project_id, "case_name": project["name"],
         "kind": data.kind, "anchor_type": data.anchor_type, "anchor_id": data.anchor_id, "anchor_label": data.anchor_label,
         "parent_id": data.parent_id, "author_id": user["id"], "author_name": user["name"], "author_role": user["role"],
         "body": data.body.strip(), "citations": citations, "assessment": data.assessment.model_dump() if data.assessment else None,
@@ -717,9 +722,9 @@ def add_comment(request: Request, project_id: str, data: CommentInput):
 
 @app.put("/api/projects/{project_id}/comments/{comment_id}")
 def edit_comment(request: Request, project_id: str, comment_id: str, data: CommentUpdate):
-    project_or_404(project_id)
+    project = project_or_404(project_id)
     comment = store.get_comment(comment_id)
-    if not comment or comment["project_id"] != project_id:
+    if not comment or comment["project_id"] not in (project_id, store.discussion_id(project)):
         raise HTTPException(404, "Comment not found.")
     user = request.state.user
     if comment["author_id"] != user["id"] and user["role"] != "admin":
@@ -736,8 +741,9 @@ def edit_comment(request: Request, project_id: str, comment_id: str, data: Comme
 
 @app.delete("/api/projects/{project_id}/comments/{comment_id}")
 def remove_comment(request: Request, project_id: str, comment_id: str):
+    project = project_or_404(project_id)
     comment = store.get_comment(comment_id)
-    if not comment or comment["project_id"] != project_id:
+    if not comment or comment["project_id"] not in (project_id, store.discussion_id(project)):
         raise HTTPException(404, "Comment not found.")
     user = request.state.user
     if comment["author_id"] != user["id"] and user["role"] != "admin":
@@ -761,7 +767,7 @@ def set_status(request: Request, project_id: str, key: str, data: FindingStatusI
 @app.get("/api/projects/{project_id}/export")
 def export(project_id: str):
     project = project_or_404(project_id)
-    project = {**project, "discussion": store.comments(project_id), "finding_statuses": list(store.finding_statuses(project_id).values())}
+    project = {**project, "discussion": store.discussion(project), "finding_statuses": list(store.finding_statuses(project_id).values())}
     return Response(
         json.dumps(project, ensure_ascii=False, indent=2), media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="roadwatch-{project_id}.json"'},

@@ -172,7 +172,7 @@ def team_notes(project, limit=40):
     """Recent team comments, assessments and finding statuses for the model: leads to check, never facts."""
     from . import store
     notes = []
-    for c in store.comments(project["id"])[-limit:]:
+    for c in store.discussion(project)[-limit:]:
         note = {"by": f"{c.get('author_name')} ({c.get('author_role')})", "on": c.get("anchor_label") or c.get("anchor_type"),
                 "text": (c.get("body") or "")[:600], "opinion_without_citation": bool(c.get("opinion"))}
         if c.get("assessment"):

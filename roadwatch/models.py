@@ -189,7 +189,7 @@ class SettingsInput(BaseModel):
 
 
 class OpenDataInput(BaseModel):
-    since_year: int = Field(default=2015, ge=2000, le=2100)
+    since_year: int = Field(default=2000, ge=2000, le=2100)
 
 
 class MemberInput(BaseModel):

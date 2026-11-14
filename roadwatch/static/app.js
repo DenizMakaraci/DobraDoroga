@@ -115,7 +115,7 @@ function render() {
     <div id="tab-content">${tab === "report" ? renderReport(latest, stale) : tab === "discussion" ? renderDiscussion(latest) : tab === "map" ? renderMap() : tab === "vendor" ? renderVendor() : tab === "evidence" ? renderEvidence() : tab === "finances" ? renderFinances() : renderObservations()}</div>`;
   if (busy) workspace.querySelectorAll("button").forEach(button => button.disabled = true);
   if (!canEdit()) workspace.querySelectorAll("[data-action='checks'],[data-action='investigate'],[data-action='investigate-deep'],[data-action='evidence'],[data-action='finance'],[data-action='observation'],[data-action='pull-open-data'],[data-action='save-vendor'],[data-action='delete-project'],[data-delete],[data-remove-street],[data-limit]").forEach(el => { el.disabled = true; el.title = "Viewers can read and discuss; ask an admin for the investigator role."; });
-  if (tab === "discussion") { loadDiscussion(); clearTimeout(discussionTimer); discussionTimer = setTimeout(function poll() { if (tab === "discussion" && current) loadDiscussion(true).then(() => { discussionTimer = setTimeout(poll, 20000); }); }, 20000); }
+  if (tab === "discussion") { if (!discussion) loadDiscussion(); clearTimeout(discussionTimer); discussionTimer = setTimeout(function poll() { if (tab === "discussion" && current) loadDiscussion(true).then(() => { discussionTimer = setTimeout(poll, 20000); }); }, 20000); }
   if (tab === "map") { mountMap(); $("#condition-toggle")?.addEventListener("change", e => toggleCondition(e.target.checked).catch(err => notify(err.message, true))); } else map = null;
 }
 function streetList(locations, removable) {
@@ -155,7 +155,7 @@ function renderVendor() {
       <label>Province to add<select id="vendor-province"><option value="">Federal records only</option>${provinces.map(p => `<option value="${escapeHTML(p.key)}" ${p.key === vendor.province ? "selected" : ""}>${escapeHTML(p.name)} (+ ${escapeHTML(p.city_name)})</option>`).join("")}</select></label>
       <button class="secondary" data-action="save-vendor">Save names →</button>
       <p class="help">Records are matched by canonical company name, exactly or as a name prefix ("GC Strategies" also finds "GC Strategies Inc."); add the numbered company or former names here so nothing is missed, and check the <em>Vendor name</em> on each cited row.</p>
-      <div class="form-grid"><label>Records since<select id="since-year">${[2000, 2005, 2010, 2015, 2018, 2020, 2022].map(y => `<option value="${y}" ${y === (pulled[0]?.since_year ?? 2015) ? "selected" : ""}>${y}</option>`).join("")}</select></label><div></div></div>
+      <div class="form-grid"><label>Records since<select id="since-year">${[2000, 2005, 2010, 2015, 2018, 2020, 2022].map(y => `<option value="${y}" ${y === (pulled[0]?.since_year ?? 2000) ? "selected" : ""}>${y}</option>`).join("")}</select></label><div></div></div>
       <button class="primary" data-action="pull-open-data">${pulled.length ? (stale ? "Pull open data for the new names →" : pending ? "Pull again (federal index was building) →" : "Refresh open data →") : "Pull open data for this supplier →"}</button>
       <p class="help">${escapeHTML(vendorScope())}: federal contracts over $10,000 with their amendments, sole-source reasons and bid counts; Registry of Lobbyists communications; the PSPC ineligibility list${vendor.province ? "; " + escapeHTML(provinces.find(p => p.key === vendor.province)?.tiers || "") : ""}.</p></div>`;
   return `<div class="section-header"><div><h2>Supplier &amp; open data</h2><p class="help">Follow one company across every government that publishes what it pays it.</p></div></div>
@@ -174,7 +174,7 @@ function renderMap() {
       <label class="check"><input type="checkbox" id="condition-toggle" ${current.show_condition !== false ? "checked" : ""}> Show road condition on the map</label>
       ${locations.length ? streetList(locations, true) : "<h3>Search or click the map</h3>"}
       <p class="help">${locations.length ? `Search or click the map to add another street in ${escapeHTML(city.name)}. Streets in one case must be in the same city; their open data is merged, and the investigation looks for the same suppliers, permit holders and timing across them.` : `Type a street or click the road on the map. You can add several streets to investigate them together. Open data is connected for ${escapeHTML(cities.map(c => c.name).join(" and "))}; each city's records are kept apart.`}</p>
-      ${locations.length ? `<div class="form-grid"><label>Records since<select id="since-year">${[2000, 2005, 2010, 2015, 2018, 2020, 2022].map(y => `<option value="${y}" ${y === (pulled[0]?.since_year ?? 2015) ? "selected" : ""}>${y}</option>`).join("")}</select></label><div></div></div>
+      ${locations.length ? `<div class="form-grid"><label>Records since<select id="since-year">${[2000, 2005, 2010, 2015, 2018, 2020, 2022].map(y => `<option value="${y}" ${y === (pulled[0]?.since_year ?? 2000) ? "selected" : ""}>${y}</option>`).join("")}</select></label><div></div></div>
       <button class="primary" data-action="pull-open-data">${pulled.length ? (stale ? "Pull open data for the new streets →" : "Refresh open data →") : `Pull open data for ${locations.length > 1 ? "these streets" : "this street"} →`}</button>
       <p class="help">Pulls ${escapeHTML(city.name)}'s contracts, permits, 311 requests${city.key === "toronto" ? ", road program, non-competitive contracts and lobbyist registry" : ""}, keeps the records that name ${locations.length > 1 ? "any of these streets" : "this street"}, and stores them as citable documents.</p>` : ""}</div>`;
   const datasets = datasetPanel(pulled, (pulled[0]?.streets || []).join(", "), stale ? "Streets were added since this pull. Pull again to include them." : "");
@@ -205,10 +205,17 @@ function pieChart(entries, total) {
   const legend = top.map(([label, value], i) => `<li><span class="swatch" data-colour="${i % PIE_COLOURS.length}"></span><span class="legend-label">${escapeHTML(label)}</span><span class="legend-value">${compact(value)} · ${Math.round(value / total * 100)}%</span></li>`).join("");
   return `<div class="pie"><svg viewBox="0 0 120 120" width="150" height="150" role="img" aria-label="Award value by supplier">${slices}</svg><ul class="legend">${legend}</ul></div>`;
 }
+// Both series on one run of years, so two charts stacked above each other line up; a year without data is a gap.
+function sameYears(start, ...series) {
+  const years = series.flat().map(([year]) => Number(year)).filter(Boolean);
+  if (!years.length) return series;
+  const from = Math.min(start || Infinity, ...years), to = Math.max(...years);
+  return series.map(entries => { const values = new Map(entries); return Array.from({ length: to - from + 1 }, (_, i) => [String(from + i), values.get(String(from + i)) ?? null]); });
+}
 function barChart(entries, format, label) {
   if (!entries.length) return "";
-  const max = Math.max(...entries.map(([, v]) => v)) || 1, w = 100 / entries.length, every = entries.length > 8 ? 2 : 1;
-  const bars = entries.map(([k, v], i) => `<rect x="${(i * w + 0.8).toFixed(2)}" y="${(60 - 58 * v / max).toFixed(2)}" width="${(w - 1.6).toFixed(2)}" height="${Math.max(0.5, 58 * v / max).toFixed(2)}" fill="#116c5a"><title>${escapeHTML(k)}: ${format(v)}</title></rect>`).join("");
+  const max = Math.max(...entries.map(([, v]) => v ?? 0)) || 1, w = 100 / entries.length, every = Math.ceil(entries.length / 8);
+  const bars = entries.map(([k, v], i) => v == null ? "" : `<rect x="${(i * w + 0.8).toFixed(2)}" y="${(60 - 58 * v / max).toFixed(2)}" width="${(w - 1.6).toFixed(2)}" height="${Math.max(0.5, 58 * v / max).toFixed(2)}" fill="#116c5a"><title>${escapeHTML(k)}: ${format(v)}</title></rect>`).join("");
   const labels = entries.map(([k], i) => `<span>${i % every === 0 ? escapeHTML(String(k).slice(-4)) : ""}</span>`).join("");
   return `<div class="chart"><svg viewBox="0 0 100 60" class="bars" preserveAspectRatio="none" role="img" aria-label="${escapeHTML(label)}">${bars}</svg><div class="axis">${labels}</div></div>`;
 }
@@ -262,13 +269,15 @@ function renderOverview() {
   const s311 = get("requests_311")?.summary || [];
   const damage311 = groupSum(s311.filter(i => i.year && /pot ?hole|damaged|sinking|utility cut|nid-de-poule|pavage|trottoir ou bordure|affaissement/i.test(i.type)), i => i.year, i => i.count).sort((a, b) => a[0].localeCompare(b[0]));
   const since = pulled[0].since_year, streets = pulled[0].streets || [];
+  const [damageYears, freezeYears] = damage311.length && freeze.length ? sameYears(since, damage311, freeze) : [damage311, freeze];
+  const first311 = damage311[0]?.[0], blank311 = first311 && damageYears[0][0] < first311 ? ` The city's published 311 records for ${streets.length > 1 ? "these streets" : "this street"} begin in ${first311}; earlier years are blank.` : "";
   const stat = (label, value, foot) => `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div><div class="foot">${foot}</div></div>`;
   return `<div class="panel overview"><div class="section-header"><div><p class="eyebrow">AT A GLANCE · ${escapeHTML((pulled[0].city || "").toUpperCase())}</p><h3>What ${escapeHTML(pulled[0].city || "the city")}'s records show for ${escapeHTML(streets.join(", "))} since ${since}</h3></div></div>
     <div class="stats">${stat("Awarded for road work", compact(total), `${roadAwards.length} competitive award${roadAwards.length === 1 ? "" : "s"} · award values, not payments`)}${stat("All awards naming the street" + (streets.length > 1 ? "s" : ""), compact(allTotal), `${awards.length} award${awards.length === 1 ? "" : "s"} incl. non-road work`)}${stat("Non-competitive, same suppliers", compact(nonCompTotal), `${nonComp.length} contract${nonComp.length === 1 ? "" : "s"} anywhere in the city`)}${get("road_program") ? stat("Road program entries", programs.length, `${programs.filter(p => p.status === "Active").length} active · ${permits.length} live permit${permits.length === 1 ? "" : "s"}`) : stat("Live permits", permits.length, `${new Set(permits.map(p => p.contractor).filter(Boolean)).size} organisations named`)}${get("lobbying") ? stat("Suppliers who lobby the City", lobbyingSuppliers, `${lobbying.length} registry entr${lobbying.length === 1 ? "y" : "ies"} incl. street mentions`) : ""}${get("bids") ? stat("Bidders per road tender", avgBidders ?? "—", `${bids.length} SEAO tender${bids.length === 1 ? "" : "s"} · ${single} with a single bidder`) : ""}${get("debarment") ? stat("Barred companies (RENA)", barred.length, barred.length ? escapeHTML(barred[0].company) : "none among suppliers & bidders") : ""}${get("traffic") && heavyAvg ? stat("Heavy-vehicle share", `${heavyAvg}%`, `${trafficRows.length} intersection count${trafficRows.length === 1 ? "" : "s"}`) : ""}</div>
     <div class="overview-grid">
       <div><h4>Who won the road work</h4>${bySupplier.length ? pieChart(bySupplier, total) : '<p class="help">No road-related competitive awards name these streets in the period.</p>'}</div>
       <div><h4>Award value by year</h4>${byYear.length ? barChart(byYear, compact, "Award value by year") : '<p class="help">—</p>'}${streets.length > 1 && byStreet.length ? `<h4>By street</h4><ul class="legend plain">${byStreet.map(([k, v]) => `<li><span class="legend-label">${escapeHTML(k)}</span><span class="legend-value">${compact(v)}</span></li>`).join("")}</ul>` : ""}</div>
-      <div><h4>Road-damage 311 requests by year</h4>${damage311.length ? barChart(damage311, v => `${v} requests`, "Road damage requests by year") : '<p class="help">—</p>'}<p class="help">Potholes, damaged or sinking road, utility-cut settlement at intersections on the street${streets.length > 1 ? "s" : ""}.</p>${freeze.length ? `<h4>Freeze-thaw days per winter</h4>${barChart(freeze, v => `${v} days`, "Freeze-thaw days per winter")}<p class="help">Winter ending in that year, nearest Environment Canada station. Compare with the complaint bars above.</p>` : ""}</div>
+      <div><h4>Road-damage 311 requests by year</h4>${damage311.length ? barChart(damageYears, v => `${v} requests`, "Road damage requests by year") : '<p class="help">—</p>'}<p class="help">Potholes, damaged or sinking road, utility-cut settlement at intersections on the street${streets.length > 1 ? "s" : ""}.${blank311}</p>${freeze.length ? `<h4>Freeze-thaw days per winter</h4>${barChart(freezeYears, v => `${v} days`, "Freeze-thaw days per winter")}<p class="help">Winter ending in that year, nearest Environment Canada station. Compare with the complaint bars above.</p>` : ""}</div>
     </div>
     <p class="help">Figures are computed from the open-data rows below and match records by street name; a long street's total includes other segments. Awards are authorizations, not money paid — payments need the ledger. Run the investigation for indicators and cited findings.</p></div>`;
 }
@@ -434,7 +443,7 @@ $("#new-case-province").addEventListener("change", updateProvinceHelp);
 let newCaseSince = 0;  // "records since" chosen in the new-case dialog, consumed by the first pull
 async function pullOpenData() {
   if (busy) return;
-  const since = newCaseSince || Number($("#since-year")?.value || 2015);
+  const since = newCaseSince || Number($("#since-year")?.value || 2000);
   newCaseSince = 0;
   busy = "opendata"; render();
   try { current = await api(`/projects/${current.id}/open-data`, "POST", { since_year: since }); notify("Open data stored as documents. Run the investigation to analyse it."); }
@@ -466,9 +475,15 @@ function commentActions(c) {
   const mine = me && (c.author_id === me.id || me.role === "admin");
   return mine ? `<div class="comment-actions"><button class="text-button" data-edit-comment="${c.id}">Edit</button><button class="text-button danger" data-delete-comment="${c.id}">Delete</button></div>` : "";
 }
+// A comment in a shared discussion may cite a document held by another case on the same streets: open this case's copy.
+function localCitation(citation) {
+  if (current.evidence.some(d => d.id === citation.evidence_id)) return citation;
+  const twin = citation.title && current.evidence.find(d => d.title === citation.title);
+  return twin ? { ...citation, evidence_id: twin.id } : citation;
+}
 function commentCard(c, depth = 0) {
-  return `<article class="comment ${depth ? "reply" : ""}" id="comment-${c.id}"><div class="comment-head"><strong>${escapeHTML(c.author_name)}</strong><span class="badge">${escapeHTML(c.author_role)}</span>${c.opinion ? '<span class="badge opinion" title="Conclusory language without a citation">Opinion</span>' : ""}<small class="help">${new Date(c.created_at).toLocaleString()}${c.edited_at ? " · edited" : ""}</small></div>
-    <p>${escapeHTML(c.body)}</p><div class="citations">${(c.citations || []).map((ct, i) => citationButton(ct, current.evidence, i)).join("")}</div>
+  return `<article class="comment ${depth ? "reply" : ""}" id="comment-${c.id}"><div class="comment-head"><strong>${escapeHTML(c.author_name)}</strong><span class="badge">${escapeHTML(c.author_role)}</span>${c.opinion ? '<span class="badge opinion" title="Conclusory language without a citation">Opinion</span>' : ""}<small class="help">${new Date(c.created_at).toLocaleString()}${c.edited_at ? " · edited" : ""}${c.case_id && c.case_id !== current.id ? ` · posted in “${escapeHTML(c.case_name || "another case")}”` : ""}</small></div>
+    <p>${escapeHTML(c.body)}</p><div class="citations">${(c.citations || []).map((ct, i) => citationButton(localCitation(ct), current.evidence, i)).join("")}</div>
     <div class="comment-actions"><button class="text-button" data-reply="${c.id}">Reply</button>${commentActions(c).replace('<div class="comment-actions">', "").replace("</div>", "")}</div></article>`;
 }
 function renderDiscussion(latest) {
@@ -483,7 +498,7 @@ function renderDiscussion(latest) {
   const grouped = {};
   roots.forEach(c => { (grouped[`${c.anchor_type}|${c.anchor_id}`] ||= []).push(c); });
   const threads = Object.entries(grouped).map(([key, list]) => `<section class="thread"><h4>${escapeHTML(list[0].anchor_label || (list[0].anchor_type === "case" ? "Whole case" : list[0].anchor_type))}</h4>${list.map(c => commentCard(c) + (byParent[c.id] || []).map(r => commentCard(r, 1)).join("")).join("")}</section>`).join("");
-  return `<div class="section-header"><div><h2>Discussion</h2><p class="help">${escapeHTML(discussion.notice)}</p></div><div class="help">${members.length} member${members.length === 1 ? "" : "s"}${me ? ` · you: ${escapeHTML(me.name)} (${escapeHTML(me.role)})` : ""}</div></div>
+  return `<div class="section-header"><div><h2>Discussion</h2><p class="help">${escapeHTML(discussion.notice)}</p>${discussion.shared_streets?.length ? `<p class="help"><strong>One discussion for ${escapeHTML(discussion.shared_streets.join(", "))}.</strong> Every case on exactly ${discussion.shared_streets.length === 1 ? "this street" : "these streets"} shows and adds to it; adding or removing a street moves the case to that set's discussion. Finding statuses and owners stay with each case.</p>` : ""}</div><div class="help">${members.length} member${members.length === 1 ? "" : "s"}${me ? ` · you: ${escapeHTML(me.name)} (${escapeHTML(me.role)})` : ""}</div></div>
     ${renderAssessments()}${board}
     <div class="panel composer"><p class="eyebrow" id="composer-title">${discussAnchor?.replyTo ? "REPLY" : "NEW POST"}</p>
       <div class="form-grid"><label>Type<select id="post-kind"><option value="comment">Comment / working note</option><option value="assessment">Assessment (structured conclusion)</option></select></label>
@@ -496,9 +511,11 @@ function renderDiscussion(latest) {
       <div class="actions"><button class="primary" data-action="post-comment">Post →</button>${discussAnchor?.replyTo ? '<button class="secondary" data-action="cancel-reply">Cancel reply</button>' : ""}</div></div>
     ${threads || '<div class="panel empty"><h2>No discussion yet</h2><p>Start with what you checked and what someone should verify next.</p></div>'}`;
 }
+// Someone is part-way through a post: a background refresh must not redraw the form and lose it.
+function composing() { return tab === "discussion" && ["#post-body", "#post-summary", "#post-cite-quote"].some(id => $(id)?.value.trim()); }
 async function loadDiscussion(silent = false) {
   if (!current) return;
-  try { const fresh = await api(`/projects/${current.id}/discussion`); const changed = JSON.stringify(fresh.comments) !== JSON.stringify(discussion?.comments) || JSON.stringify(fresh.statuses) !== JSON.stringify(discussion?.statuses); discussion = fresh; if (!silent || changed) render(); }
+  try { const fresh = await api(`/projects/${current.id}/discussion`); const changed = JSON.stringify(fresh.comments) !== JSON.stringify(discussion?.comments) || JSON.stringify(fresh.statuses) !== JSON.stringify(discussion?.statuses); discussion = fresh; if (!silent || (changed && !composing())) render(); }
   catch (error) { if (!silent) notify(error.message, true); }
 }
 async function postComment() {
@@ -536,7 +553,7 @@ function showNewKey(member) {
 }
 function citationButton(citation, sources, index, report = false) {
   const doc = sources.find(d => d.id === citation.evidence_id);
-  return `<button class="citation" data-source="${escapeHTML(citation.evidence_id)}" data-page="${citation.page}" ${report ? 'data-report-source="true"' : ""} title="${escapeHTML(citation.quote)}">[${index + 1}] ${escapeHTML(doc?.title || "Source")} · p.${citation.page}</button>`;
+  return `<button class="citation" data-source="${escapeHTML(citation.evidence_id)}" data-page="${citation.page}" ${report ? 'data-report-source="true"' : ""} title="${escapeHTML(citation.quote)}">[${index + 1}] ${escapeHTML(doc?.title || citation.title || "Source")} · p.${citation.page}</button>`;
 }
 function renderReport(report, stale) {
   const noDocs = !current.evidence.length;
@@ -627,7 +644,7 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.project) return await selectProject(button.dataset.project);
     if (button.dataset.hitProject) return await openHit(button);
     if (button.dataset.searchMode) return await searchCases(lastSearch, button.dataset.searchMode);
-    if (button.dataset.tab) { tab = button.dataset.tab; render(); return; }
+    if (button.dataset.tab) { tab = button.dataset.tab; render(); if (tab === "discussion" && discussion) loadDiscussion(true); return; }
     if (button.dataset.source) return openSource(button.dataset.source, Number(button.dataset.page), !!button.dataset.reportSource);
     if (button.dataset.place !== undefined) {
       const place = mapResults[Number(button.dataset.place)];
@@ -797,7 +814,7 @@ for (const name of ["project", "evidence", "finance", "observation"]) {
                           vendor_aliases: (data.vendor_aliases || "").split(",").map(s => s.trim()).filter(Boolean), province: data.vendor_province || "", locations: [] };
         current = await api("/projects", "POST", payload); tab = "vendor"; await refreshList();
         closeDialog(form.closest("dialog")); render();
-        newCaseSince = Number(data.vendor_since || 2015);
+        newCaseSince = Number(data.vendor_since || 2000);
         await pullOpenData();
         return notify(`Case created. ${current.open_data.length} open-data sets stored — run the investigation when ready.`);
       } else if (name === "project") {

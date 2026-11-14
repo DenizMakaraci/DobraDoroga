@@ -1,4 +1,5 @@
 import functools
+import hashlib
 import json
 import os
 import sqlite3
@@ -285,6 +286,25 @@ def save_comment(comment):
 def delete_comment(comment_id):
     with database() as connection:
         return connection.execute("UPDATE comments SET deleted = 1 WHERE id = ?", (comment_id,)).rowcount > 0
+
+
+def discussion_id(project):
+    """Where a case's discussion is kept. Street cases on the same set of streets in one city, in any order, share
+    one discussion; a supplier case, or a case with no street yet, keeps its own."""
+    from .opendata.common import street_key
+    locations = project.get("locations") or []
+    roads = sorted({" ".join(part for part in street_key(location["road"]) if part) for location in locations} - {""})
+    if project.get("anchor") == "vendor" or not roads:
+        return project["id"]
+    return "roads-" + hashlib.sha256("|".join([locations[0].get("city_key") or "", *roads]).encode()).hexdigest()[:20]
+
+
+def discussion(project):
+    """The comments a case shows: the discussion shared by its set of streets, plus any posted on the case itself
+    before discussions were shared."""
+    shared = discussion_id(project)
+    posts = comments(shared) + (comments(project["id"]) if shared != project["id"] else [])
+    return sorted(posts, key=lambda comment: comment["created_at"])
 
 
 @_backend
